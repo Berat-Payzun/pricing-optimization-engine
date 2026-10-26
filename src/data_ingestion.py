@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import io
+import re
+from pathlib import Path
+
 import pandas as pd
 
 from config import CPI_STALE_MONTHS, MIN_PERIODS_FIT, MIN_PERIODS_WARN
@@ -38,19 +42,64 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.rename(columns=rename)
 
 
+# Excel in Turkish/German locales saves CSVs with ";" separators, decimal commas
+# (1.234,56), dd.mm.yyyy dates and a Windows code page instead of UTF-8.
+ENCODINGS = ("utf-8-sig", "cp1254", "cp1252")
+DECIMAL_COMMA = r"-?(\d{1,3}(\.\d{3})+|\d+),\d+"
+DOTTED_DATE = r"\d{1,2}\.\d{1,2}\.\d{4}.*"
+
+
+def read_text(source) -> str:
+    """Return the file's text from a path, a bytes buffer or a text buffer."""
+    data = Path(source).read_bytes() if isinstance(source, (str, Path)) else source.read()
+    if isinstance(data, str):
+        return data
+    for encoding in ENCODINGS:
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("cp1252", errors="replace")
+
+
+def detect_separator(text: str) -> str:
+    lines = text.strip().splitlines()
+    header = lines[0] if lines else ""
+    return max([",", ";", "\t"], key=header.count)
+
+
+def to_number(values: pd.Series, decimal_comma: bool) -> pd.Series:
+    s = values.astype("string").str.strip()
+    if decimal_comma:
+        is_comma = s.str.fullmatch(DECIMAL_COMMA).fillna(False).astype(bool)
+        s = s.where(~is_comma, s.str.replace(".", "", regex=False).str.replace(",", ".", regex=False))
+    return pd.to_numeric(s, errors="coerce").astype("float64")  # plain floats, not nullable Float64
+
+
+def to_dates(values: pd.Series) -> pd.Series:
+    s = values.astype("string").str.strip()
+    first = s.dropna()
+    dayfirst = not first.empty and bool(re.fullmatch(DOTTED_DATE, first.iloc[0]))
+    return pd.to_datetime(s, errors="coerce", dayfirst=dayfirst)
+
+
 def load_csv(source, default_cogs: float) -> tuple[pd.DataFrame, list[str]]:
     """Read and clean raw sales rows. Returns (clean_df, warnings)."""
     warnings: list[str] = []
-    df = normalize_columns(pd.read_csv(source))
+    text = read_text(source)
+    sep = detect_separator(text)
+    df = normalize_columns(pd.read_csv(io.StringIO(text), sep=sep, dtype=str))
 
     missing = [c for c in REQUIRED if c not in df.columns]
     if missing:
         raise DataValidationError(Msg("err_missing_cols", cols=", ".join(missing)))
 
     df = df[[c for c in REQUIRED + OPTIONAL if c in df.columns]].copy()
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    df["Date"] = to_dates(df["Date"])
+    # With "," as the separator a comma inside a value is a thousands separator (US quoted
+    # "1,234"), so decimal commas are only recognised in ";" or tab separated files.
     for col in df.columns.drop("Date"):
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+        df[col] = to_number(df[col], decimal_comma=sep != ",")
 
     n_raw = len(df)
     df = df.dropna(subset=REQUIRED)

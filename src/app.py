@@ -152,6 +152,7 @@ except (DataValidationError, ValueError) as e:
 
 with st.spinner(t("spinner_macro")):
     infl, fx = cached_inflation(country), cached_fx(country)
+    us_infl = infl if country == "US" else cached_inflation("US")
 
 agg, deflate_warnings = deflate(agg, infl.series if use_real else None)
 if not use_real:
@@ -202,15 +203,21 @@ with s3:
                            help=None if model.has_comp else t("shock_comp_help"))
 with s4:
     st.button(t("shock_reset"), on_click=reset_shocks, args=(infl, fx), width="stretch")
+passthrough = st.toggle(t("shock_passthrough"), value=True, key="shock_passthrough", help=t("shock_passthrough_help"))
 if not model.has_comp:
     st.caption(t("shock_comp_disabled"))
 
 # ---------- scenarios ----------
 
+# Imported inputs are priced in USD, so they inflate at the US rate (for USD countries
+# every input is local, so they follow the slider like everything else).
+usd_inflation = inflation / 100 if is_usd else us_infl.value / 100
+
 common = dict(base_cogs=base_cogs, fixed_monthly=fixed_monthly, capacity=capacity or np.inf, period=timeframe,
               import_share=import_share / 100, base_comp_price=base_comp, current_price=current_price, max_price=max_price)
-result = run_scenario(model, ScenarioParams(**common, inflation=inflation / 100,
-                                            fx_shift=(0 if is_usd else fx_shift) / 100, comp_shift=comp_shift / 100))
+result = run_scenario(model, ScenarioParams(**common, inflation=inflation / 100, usd_inflation=usd_inflation,
+                                            fx_shift=(0 if is_usd else fx_shift) / 100, comp_shift=comp_shift / 100,
+                                            price_passthrough=passthrough))
 today = run_scenario(model, ScenarioParams(**common))
 
 opt, base = result.optimal, result.baseline
@@ -281,7 +288,8 @@ with charts_area:
         fig.add_trace(go.Scatter(x=agg[price_col], y=agg["Quantity_Sold"] * PERIOD_MULT[timeframe], mode="markers",
                                  name=t("chart_observed"), marker=dict(color=col["s2"], size=9, line=dict(color="white", width=1)),
                                  hovertemplate=f"{sym}%{{x:,.2f}} → %{{y:,.0f}} {units}<extra></extra>"))
-        fig.add_trace(go.Scatter(x=curve["price"], y=curve["q_demand"], name=t("chart_fitted"), line=dict(color=col["s1"], width=2),
+        # Fitted demand in today's money (no shock), comparable with the observed real prices
+        fig.add_trace(go.Scatter(x=today.curve["price"], y=today.curve["q_demand"], name=t("chart_fitted"), line=dict(color=col["s1"], width=2),
                                  hovertemplate=f"%{{y:,.0f}} {units}<extra></extra>"))
         style(fig, t("chart_demand_title", per=per),
               t("axis_price_kind", sym=sym, kind=t("price_real" if use_real else "price_nominal")), t("axis_units"))

@@ -154,9 +154,12 @@ STRINGS: dict[str, dict[str, str]] = {
     },
     "shock_infl": {"en": "Country inflation rate (%)", "tr": "Ülke enflasyon oranı (%)", "de": "Inflationsrate des Landes (%)"},
     "shock_infl_help": {
-        "en": "Raises COGS and fixed costs.",
-        "tr": "SMM'yi ve sabit giderleri artırır.",
-        "de": "Erhöht Stückkosten und Fixkosten.",
+        "en": "Raises fixed costs and the locally sourced share of COGS. With price pass-through on, it also "
+              "raises customers' willingness to pay and the competitor's price.",
+        "tr": "Sabit giderleri ve SMM'nin yerel kaynaklı kısmını artırır. Fiyat yansıtma açıksa müşterilerin "
+              "ödemeye razı olduğu fiyatı ve rakip fiyatını da artırır.",
+        "de": "Erhöht die Fixkosten und den lokal bezogenen Anteil der Stückkosten. Bei aktivierter "
+              "Preisweitergabe steigen auch die Zahlungsbereitschaft der Kunden und der Konkurrenzpreis.",
     },
     "shock_fx": {"en": "Exchange rate shift (%)", "tr": "Döviz kuru değişimi (%)", "de": "Wechselkursänderung (%)"},
     "shock_fx_help": {
@@ -172,6 +175,22 @@ STRINGS: dict[str, dict[str, str]] = {
         "de": "Erfordert eine Spalte Competitor_Price in der CSV.",
     },
     "shock_reset": {"en": "Reset to live data", "tr": "Canlı verilere sıfırla", "de": "Auf Live-Daten zurücksetzen"},
+    "shock_passthrough": {
+        "en": "Customer prices rise with inflation",
+        "tr": "Müşteri fiyatları enflasyonla birlikte artar",
+        "de": "Kundenpreise steigen mit der Inflation",
+    },
+    "shock_passthrough_help": {
+        "en": "On: inflation lifts the whole price level, so willingness to pay and the competitor's price rise "
+              "with it and your price can keep pace. Off: only your costs rise (a margin squeeze where you "
+              "can't pass costs on).",
+        "tr": "Açık: enflasyon genel fiyat düzeyini yükseltir; müşterilerin ödemeye razı olduğu fiyat ve rakip "
+              "fiyatı da artar, fiyatınız enflasyona ayak uydurabilir. Kapalı: yalnızca maliyetleriniz artar "
+              "(maliyetleri fiyata yansıtamadığınız bir marj sıkışması).",
+        "de": "An: Die Inflation hebt das gesamte Preisniveau, Zahlungsbereitschaft und Konkurrenzpreis steigen "
+              "mit, und Ihr Preis kann Schritt halten. Aus: Nur Ihre Kosten steigen (Margendruck, weil Sie "
+              "die Kosten nicht weitergeben können).",
+    },
     "shock_comp_disabled": {
         "en": "Competitor slider disabled: the uploaded data has no Competitor_Price column, so cross-price "
               "effects can't be estimated.",

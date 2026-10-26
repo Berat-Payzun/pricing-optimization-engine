@@ -6,9 +6,10 @@ Pipeline (Steps refer to the architecture guide):
   3. PED / XED                                      (elasticities)
   4. Competitor price shock                         (run_scenario)
   5. Capacity cap                                   (run_scenario)
-  6. FX shock on the imported share of COGS         (shocked_costs)
-  7. Inflation on COGS and fixed costs              (shocked_costs)
-  8. Profit sweep over a 2,000-point price grid     (run_scenario)
+  6. FX + USD inflation on the imported COGS share  (shocked_costs)
+  7. Local inflation on the rest of COGS and fixed  (shocked_costs)
+  8. Profit sweep over a 2,000-point price grid     (run_scenario); with price pass-through,
+     demand is evaluated at the real price P / (1 + inflation)
 """
 
 from __future__ import annotations
@@ -140,6 +141,10 @@ class ScenarioParams:
     base_comp_price: float | None = None
     current_price: float = 0.0
     max_price: float = 0.0
+    usd_inflation: float = 0.0  # fraction: inflation of the USD-priced inputs
+    # True: general inflation also lifts willingness to pay and the competitor's price, so
+    # demand is evaluated at real prices (price / (1 + inflation)). False: only costs rise.
+    price_passthrough: bool = False
 
 
 @dataclass
@@ -158,15 +163,18 @@ class ScenarioResult:
 
 
 def shocked_costs(p: ScenarioParams) -> tuple[float, float]:
-    """Steps 6-7: FX hits only the imported share of COGS; inflation hits all costs."""
-    cogs_fx = p.base_cogs * (1 + p.import_share * p.fx_shift)
-    cogs_final = cogs_fx * (1 + p.inflation)
+    """Steps 6-7: the imported (USD-priced) share of COGS moves with FX and USD inflation,
+    the local share and fixed costs with local inflation."""
+    imported = p.import_share * (1 + p.fx_shift) * (1 + p.usd_inflation)
+    local = (1 - p.import_share) * (1 + p.inflation)
+    cogs_final = p.base_cogs * (imported + local)
     fixed_final = p.fixed_monthly * (1 + p.inflation) * PERIOD_MULT[p.period]
     return cogs_final, fixed_final
 
 
-def _economics(model, price, comp_price, cogs, fixed, capacity, mult) -> dict:
-    q_demand = model.predict(price, comp_price) * mult
+def _economics(model, price, comp_price, cogs, fixed, capacity, mult, level=1.0) -> dict:
+    """`price` is nominal; demand responds to the real price `price / level`."""
+    q_demand = model.predict(price / level, comp_price) * mult
     q_sold = np.minimum(q_demand, capacity)
     revenue = price * q_sold
     var_cost = cogs * q_sold
@@ -187,8 +195,13 @@ def run_scenario(model: DemandModel, p: ScenarioParams) -> ScenarioResult:
     mult = PERIOD_MULT[p.period]
     warnings: list[str] = []
 
-    # Step 4: competitor shock (predict directly with the shifted competitor price)
-    comp_price = p.base_comp_price * (1 + p.comp_shift) if model.has_comp else None
+    # Price level of the scenario relative to today's money (the demand model's units)
+    level = 1 + p.inflation if p.price_passthrough else 1.0
+
+    # Step 4: competitor shock. comp_real stays in today's money; under pass-through the
+    # competitor's nominal price rises with the price level too.
+    comp_real = p.base_comp_price * (1 + p.comp_shift) if model.has_comp else None
+    comp_price = comp_real * level if model.has_comp else None
 
     # Steps 6-7
     cogs_final, fixed_final = shocked_costs(p)
@@ -198,18 +211,19 @@ def run_scenario(model: DemandModel, p: ScenarioParams) -> ScenarioResult:
     high = max(p.max_price, low * 1.5)
     grid = np.linspace(low, high, PRICE_GRID_POINTS)
 
-    curve = pd.DataFrame(_economics(model, grid, comp_price, cogs_final, fixed_final, p.capacity, mult))
+    curve = pd.DataFrame(_economics(model, grid, comp_real, cogs_final, fixed_final, p.capacity, mult, level))
     i = int(curve["profit"].idxmax())
     optimal = curve.iloc[i].to_dict()
+    # Baseline keeps today's nominal price, which is a real price cut under pass-through
     baseline = {
         k: float(v)
         for k, v in _economics(
-            model, np.array(p.current_price), comp_price, cogs_final, fixed_final, p.capacity, mult
+            model, np.array(p.current_price), comp_real, cogs_final, fixed_final, p.capacity, mult, level
         ).items()
     }
 
-    ped_opt, xed_opt = elasticities(model, optimal["price"], comp_price)
-    ped_current, _ = elasticities(model, p.current_price, comp_price)
+    ped_opt, xed_opt = elasticities(model, optimal["price"] / level, comp_real)
+    ped_current, _ = elasticities(model, p.current_price / level, comp_real)
 
     profit = curve["profit"].values
     crossings = np.where(np.diff(np.sign(profit)) != 0)[0]
@@ -222,7 +236,7 @@ def run_scenario(model: DemandModel, p: ScenarioParams) -> ScenarioResult:
 
     if i == len(grid) - 1:
         warnings.append(Msg("warn_opt_at_top"))
-    if not (model.p_min <= optimal["price"] <= model.p_max):
+    if not (model.p_min <= optimal["price"] / level <= model.p_max):  # observed range is in real terms
         warnings.append(Msg("warn_extrapolated", p_min=model.p_min, p_max=model.p_max))
     if optimal["profit"] < 0:
         warnings.append(Msg("warn_loss_only"))

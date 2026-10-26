@@ -75,12 +75,46 @@ def test_period_scaling():
     assert annual.optimal["profit"] == pytest.approx(monthly.optimal["profit"] * 12, rel=1e-6)
 
 
-def test_fx_only_hits_imported_share_and_inflation_compounds():
+def test_fx_hits_imported_share_and_local_inflation_the_rest():
     p = ScenarioParams(base_cogs=100, fixed_monthly=1000, capacity=1, import_share=0.4,
                        fx_shift=0.5, inflation=0.1, period="Quarterly")
     cogs, fixed = shocked_costs(p)
-    assert cogs == pytest.approx(100 * 1.2 * 1.1)
+    assert cogs == pytest.approx(100 * (0.4 * 1.5 + 0.6 * 1.1))  # no local inflation on USD inputs
     assert fixed == pytest.approx(1000 * 1.1 * 3)
+
+
+def test_imported_share_follows_usd_inflation():
+    p = ScenarioParams(base_cogs=100, fixed_monthly=0, capacity=1, import_share=0.3,
+                       fx_shift=0.185, inflation=0.297, usd_inflation=0.037)
+    cogs, _ = shocked_costs(p)
+    assert cogs == pytest.approx(100 * (0.3 * 1.185 * 1.037 + 0.7 * 1.297))
+
+
+def test_passthrough_scales_linear_optimum_with_price_level():
+    m = fit_demand(synthetic_agg(), "linear")
+    base = run_scenario(m, params(m, max_price=200))
+    infl = run_scenario(m, params(m, max_price=200, inflation=0.3, price_passthrough=True))
+    # Costs, willingness to pay and the competitor all rise 30%, so P* rises 30% too
+    assert infl.optimal["price"] == pytest.approx(base.optimal["price"] * 1.3, rel=2e-3)
+    assert infl.comp_price == pytest.approx(50.0 * 1.3)
+    assert infl.ped_opt == pytest.approx(base.ped_opt, rel=1e-2)
+    # Same real economics, so no new warnings (e.g. no false "outside observed range")
+    assert [w.key for w in infl.warnings] == [w.key for w in base.warnings]
+
+
+def test_passthrough_off_only_raises_costs():
+    m = fit_demand(synthetic_agg(), "linear")
+    base = run_scenario(m, params(m))
+    costs_only = run_scenario(m, params(m, inflation=0.3))
+    assert base.optimal["price"] < costs_only.optimal["price"] < base.optimal["price"] * 1.3
+    assert costs_only.comp_price == pytest.approx(50.0)
+
+
+def test_passthrough_without_inflation_changes_nothing():
+    m = fit_demand(synthetic_agg(), "linear")
+    a = run_scenario(m, params(m))
+    b = run_scenario(m, params(m, price_passthrough=True))
+    assert a.optimal == b.optimal and a.baseline == b.baseline
 
 
 def test_cost_shocks_raise_optimal_price_and_cut_profit():

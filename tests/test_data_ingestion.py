@@ -99,3 +99,27 @@ def test_deflate_warns_when_cpi_ends_long_before_sales():
     assert len(warnings) == 1 and warnings[0].key == "warn_cpi_stale"
     assert "2024-03" in warnings[0]
     assert out["Real_Price"].iloc[-1] == pytest.approx(100.0)
+
+
+def test_turkish_excel_csv_semicolon_decimal_comma_cp1254():
+    text = ("Date;Price_Charged;Quantity_Sold;Cost_Per_Unit\n"
+            "01.10.2024;10,50;5;4,25\n"
+            "15.10.2024;1.234,56;4;3,9\n"
+            "02.11.2024;11;3;Şubat\n")
+    df, warnings = load_csv(io.BytesIO(text.encode("cp1254")), default_cogs=7)
+    assert df["Date"].tolist() == list(pd.to_datetime(["2024-10-01", "2024-10-15", "2024-11-02"]))  # day first
+    assert df["Price_Charged"].tolist() == pytest.approx([10.5, 1234.56, 11.0])
+    assert df["Cost_Per_Unit"].tolist() == pytest.approx([4.25, 3.9, 7.0])  # unparseable -> default
+    assert any("default COGS" in w for w in warnings)
+
+
+def test_semicolon_csv_with_dot_decimals_is_not_corrupted():
+    df, _ = load_csv(io.BytesIO(b"Date;Price_Charged;Quantity_Sold\n2024-01-01;10.5;5\n"), default_cogs=1)
+    assert df["Price_Charged"].iloc[0] == pytest.approx(10.5)
+
+
+def test_comma_csv_keeps_iso_dates_and_utf8_bom():
+    raw = "﻿Date,Price_Charged,Quantity_Sold\n2024-03-04,10.5,5\n".encode("utf-8")
+    df, _ = load_csv(io.BytesIO(raw), default_cogs=1)
+    assert df["Date"].iloc[0] == pd.Timestamp("2024-03-04")
+    assert df["Price_Charged"].iloc[0] == pytest.approx(10.5)

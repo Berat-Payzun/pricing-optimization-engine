@@ -1,10 +1,10 @@
 # Pricing Optimization Engine
 
+[![tests](https://github.com/Berat-Payzun/pricing-optimization-engine/actions/workflows/tests.yml/badge.svg)](https://github.com/Berat-Payzun/pricing-optimization-engine/actions/workflows/tests.yml)
+
 A Streamlit app that finds the **profit-maximizing price** for a product from its sales history and stress-tests it against **live macroeconomic data**: CPI inflation and exchange rates for the selected country.
 
 Upload a CSV of past prices and quantities. The engine fits a demand curve, sweeps 2,000 candidate prices, and charts revenue, cost and net profit against price. Sliders let you simulate inflation, currency and competitor shocks and see how the optimal price and profit move.
-
-![screenshot placeholder](docs/screenshot.png)
 
 ## Features
 
@@ -15,8 +15,13 @@ Upload a CSV of past prices and quantities. The engine fits a demand curve, swee
   - CPI from FRED (or the ONS for the UK)
   - FX from Yahoo Finance, with FRED as the fallback
   - Results cached for 6 hours. If a source is offline, the app falls back to built-in defaults and shows a badge.
-- **Shock simulation:** inflation (raises COGS and fixed costs), FX shift (raises only the imported share of COGS), competitor price change.
+- **Shock simulation:**
+  - inflation raises fixed costs and the locally sourced share of COGS
+  - an FX shift (plus US inflation) raises the imported, USD-priced share of COGS
+  - competitor price change
+  - a "customer prices rise with inflation" toggle decides whether inflation also lifts willingness to pay and the competitor's price
 - **Operational limits:** capacity/inventory ceiling and fixed costs; results shown per month, quarter or year.
+- **Three languages:** English, Turkish and German, switchable from the sidebar without losing inputs.
 
 ## Quick start
 
@@ -38,6 +43,8 @@ The app opens with `sample_data.csv` loaded. You can regenerate it with `python 
 | `Competitor_Price` | float | no | Enables cross-price elasticity and the competitor slider |
 
 Column names are matched case-insensitively, and common aliases (`price`, `qty`, `cost`, `competitor`) are accepted.
+
+CSVs saved by Excel in Turkish or German locales also work: `;` separators, decimal commas (`1.234,56`), `dd.mm.yyyy` dates and Windows encodings (cp1254/cp1252) are detected automatically.
 
 ## Supported countries and data sources
 
@@ -72,20 +79,24 @@ To add a country, add an entry to `COUNTRY_MAP` and `FALLBACK_MACRO` in `src/con
 | 3. Elasticities | PED = `b·P/Q` (linear) or `b` (log-log); XED = `c·P_comp/Q` or `c`. |
 | 4. Competitor shock | Demand is re-predicted at `P_comp × (1 + shift)`. |
 | 5. Capacity cap | `Q_sold = min(Q_demand × period_mult, capacity)` |
-| 6. FX shock | `COGS_fx = COGS × (1 + import_share × fx_shift)` |
-| 7. Inflation | `COGS_final = COGS_fx × (1 + π)`, `Fixed_final = Fixed_monthly × (1 + π) × period_mult` |
-| 8. Optimization | Profit = `(P − COGS_final) × Q_sold − Fixed_final`, evaluated on a 2,000-point grid from just below unit cost to the max test price. The argmax is the optimal price P*. |
+| 6. FX shock | The imported share follows the exchange rate and US inflation: `share × (1 + fx_shift) × (1 + π_USD)` |
+| 7. Inflation | The rest follows local inflation: `COGS_final = COGS × [share × (1 + fx_shift)(1 + π_USD) + (1 − share)(1 + π)]`, `Fixed_final = Fixed_monthly × (1 + π) × period_mult` |
+| 8. Optimization | Profit = `(P − COGS_final) × Q_sold − Fixed_final`, evaluated on a 2,000-point grid from just below unit cost to the max test price. The argmax is the optimal price P*. With price pass-through on, demand is evaluated at the real price `P / (1 + π)` and the competitor's price rises by `(1 + π)`. |
 
 For linear demand without a capacity cap, the result matches the closed-form optimum `P* = (a + c·P_comp − b·COGS) / (−2b)` (verified in the tests).
 
 **Assumptions and limits**
-- Prices and the fitted demand are in *today's money*. The inflation slider projects costs forward but assumes customers' willingness to pay doesn't change.
+- The demand curve is fitted in *today's money*.
+  - With "customer prices rise with inflation" on (the default), the inflation slider lifts the whole price level: costs, willingness to pay and the competitor's price. The optimal price then keeps pace with inflation.
+  - With it off, only costs rise. This shows the margin squeeze if you can't pass costs on.
+  - Shocked prices and profits are in the scenario's (inflated) money.
 - Demand is estimated from your own price history, so if prices barely varied, or price changes coincided with promotions or seasonality, the estimate can be biased. The app warns when demand slopes upward or when P* is outside the observed price range.
 - One product per file.
 
 ## Project structure
 
 ```
+├── .github/workflows/tests.yml   # runs pytest on every push and pull request
 ├── sample_data.csv
 ├── scripts/generate_sample_data.py
 ├── src/
@@ -93,6 +104,7 @@ For linear demand without a capacity cap, the result matches the closed-form opt
 │   ├── config.py           # country → series mapping, defaults
 │   ├── data_ingestion.py   # CSV cleaning, monthly aggregation, CPI deflation
 │   ├── macro_api.py        # FRED / ONS / Yahoo fetchers with fallback
-│   └── optimizer.py        # demand fit, elasticities, shock pipeline, solver
+│   ├── optimizer.py        # demand fit, elasticities, shock pipeline, solver
+│   └── translations.py     # UI strings in English, Turkish and German
 └── tests/
 ```
