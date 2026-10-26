@@ -44,12 +44,20 @@ Column names are matched case-insensitively, and common aliases (`price`, `qty`,
 | Country | CPI series | FX (local per USD) |
 |---|---|---|
 | United States | FRED `CPIAUCSL` | 1.0 (base currency) |
-| Turkey | FRED `CP0000TRM086NEST` (Eurostat HICP); fallback `TURCPIALLMINMEI` | Yahoo `TRY=X` |
-| Eurozone / Germany | FRED `CP0000EZ19M086NEST` | Yahoo `EURUSD=X` (inverted); fallback FRED `DEXUSEU` |
+| Eurozone (euro-area average) | FRED `CP0000EZ19M086NEST` (Eurostat HICP) | Yahoo `EURUSD=X` (inverted); fallback FRED `DEXUSEU` |
+| Germany | FRED `CP0000DEM086NEST` (Eurostat HICP); fallback `DEUCPIALLMINMEI` | as Eurozone |
+| France | FRED `CP0000FRM086NEST` (Eurostat HICP); fallback `FRACPIALLMINMEI` | as Eurozone |
+| Italy | FRED `CP0000ITM086NEST` (Eurostat HICP); fallback `ITACPIALLMINMEI` | as Eurozone |
+| Spain | FRED `CP0000ESM086NEST` (Eurostat HICP); fallback `ESPCPIALLMINMEI` | as Eurozone |
 | United Kingdom | ONS CPI index `D7BT`; fallback FRED `GBRCPIALLMINMEI` | Yahoo `GBPUSD=X` (inverted); fallback FRED `DEXUSUK` |
+| Turkey | FRED `CP0000TRM086NEST` (Eurostat HICP); fallback `TURCPIALLMINMEI` | Yahoo `TRY=X` |
+| Brazil | OECD SDMX `BRA.M.N.CPI.IX._T.N._Z`; fallback FRED `BRACPIALLMINMEI` | Yahoo `BRL=X`; fallback FRED `DEXBZUS` |
+| Global (World) | FRED `FPCPITOTLZGWLD` (World Bank, annual % rate) | 1.0 (priced in USD) |
 
 **Notes**
-- The OECD monthly CPI series for Turkey and the UK stopped updating in 2025, so current sources are used instead.
+- The OECD MEI monthly CPI series (`…CPIALLMINMEI`) stopped updating in 2025, so they are only fallbacks. Eurostat HICP, ONS and the OECD's live SDMX API are used first.
+- Eurozone is the euro-area average. Pick a specific country for its own inflation; all euro countries share the same EUR/USD rate.
+- The global series is an annual inflation rate. It is converted to a monthly index (each year centred on 1 July, log-linear in between). Because it lags by about a year, the most recent months are not inflation-adjusted, and the app says so in the data notes.
 - FRED blocks plain Python HTTP clients, so requests go through `curl_cffi` with browser impersonation and a browser User-Agent.
 - No API keys are needed.
 

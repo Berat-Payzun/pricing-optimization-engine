@@ -4,11 +4,17 @@ FX convention used everywhere in the app: rates are quoted as LOCAL CURRENCY PER
 so a positive % change means the local currency weakened (imported inputs get pricier).
 `fx_invert=True` marks tickers quoted the other way round (USD per local unit).
 
-CPI sources are tried in order. Series were verified live on 2026-10-25:
-- OECD MEI monthly CPI for Turkey (TURCPIALLMINMEI) and the UK (GBRCPIALLMINMEI) stopped
-  updating in 2025, so Turkey uses Eurostat's HICP (CP0000TRM086NEST) and the UK uses
-  the ONS CPI index (series D7BT), with the stale FRED series kept as a fallback.
+CPI sources are tried in order. Providers: "fred" and "oecd" return a monthly price index,
+"ons" the UK ONS index, and "fred_rate" an ANNUAL % inflation rate that macro_api converts
+to a monthly index. Series were verified live on 2026-10-26:
+- OECD MEI monthly CPI series (xxxCPIALLMINMEI) stopped updating in 2025 (Germany, France,
+  Italy, Spain, Turkey, UK: 2025-03; Brazil: 2025-04). EU countries and Turkey therefore use
+  Eurostat's HICP (CP0000xxM086NEST), the UK the ONS CPI index (D7BT), and Brazil the OECD's
+  live SDMX API, each with the stale MEI series kept as a fallback.
+- "EU" is the euro-area average (HICP for the 19-country euro area), not any single country.
 - FRED has no Turkish lira daily FX series (DEXTKUS returns 404), so TRY relies on Yahoo only.
+- The World Bank's global inflation series on FRED is FPCPITOTLZGWLD (World = WLD); it is an
+  annual % rate published with roughly a one-year lag.
 """
 
 COUNTRY_MAP = {
@@ -21,20 +27,47 @@ COUNTRY_MAP = {
         "fx_fred": None,
         "fx_invert": False,
     },
-    "TR": {
-        "name": "Turkey",
-        "currency": "TRY",
-        "symbol": "₺",
-        "cpi_sources": [("fred", "CP0000TRM086NEST"), ("fred", "TURCPIALLMINMEI")],
-        "fx_yahoo": "TRY=X",
-        "fx_fred": None,
-        "fx_invert": False,
-    },
     "EU": {
-        "name": "Eurozone / Germany",
+        "name": "Eurozone",
         "currency": "EUR",
         "symbol": "€",
         "cpi_sources": [("fred", "CP0000EZ19M086NEST")],
+        "fx_yahoo": "EURUSD=X",
+        "fx_fred": "DEXUSEU",
+        "fx_invert": True,
+    },
+    "DE": {
+        "name": "Germany",
+        "currency": "EUR",
+        "symbol": "€",
+        "cpi_sources": [("fred", "CP0000DEM086NEST"), ("fred", "DEUCPIALLMINMEI")],
+        "fx_yahoo": "EURUSD=X",
+        "fx_fred": "DEXUSEU",
+        "fx_invert": True,
+    },
+    "FR": {
+        "name": "France",
+        "currency": "EUR",
+        "symbol": "€",
+        "cpi_sources": [("fred", "CP0000FRM086NEST"), ("fred", "FRACPIALLMINMEI")],
+        "fx_yahoo": "EURUSD=X",
+        "fx_fred": "DEXUSEU",
+        "fx_invert": True,
+    },
+    "IT": {
+        "name": "Italy",
+        "currency": "EUR",
+        "symbol": "€",
+        "cpi_sources": [("fred", "CP0000ITM086NEST"), ("fred", "ITACPIALLMINMEI")],
+        "fx_yahoo": "EURUSD=X",
+        "fx_fred": "DEXUSEU",
+        "fx_invert": True,
+    },
+    "ES": {
+        "name": "Spain",
+        "currency": "EUR",
+        "symbol": "€",
+        "cpi_sources": [("fred", "CP0000ESM086NEST"), ("fred", "ESPCPIALLMINMEI")],
         "fx_yahoo": "EURUSD=X",
         "fx_fred": "DEXUSEU",
         "fx_invert": True,
@@ -48,15 +81,49 @@ COUNTRY_MAP = {
         "fx_fred": "DEXUSUK",
         "fx_invert": True,
     },
+    "TR": {
+        "name": "Turkey",
+        "currency": "TRY",
+        "symbol": "₺",
+        "cpi_sources": [("fred", "CP0000TRM086NEST"), ("fred", "TURCPIALLMINMEI")],
+        "fx_yahoo": "TRY=X",
+        "fx_fred": None,
+        "fx_invert": False,
+    },
+    "BR": {
+        "name": "Brazil",
+        "currency": "BRL",
+        "symbol": "R$",
+        "cpi_sources": [("oecd", "BRA.M.N.CPI.IX._T.N._Z"), ("fred", "BRACPIALLMINMEI")],
+        "fx_yahoo": "BRL=X",
+        "fx_fred": "DEXBZUS",
+        "fx_invert": False,
+    },
+    # No single global exchange rate: global goods are priced in the reserve currency (USD).
+    "WORLD": {
+        "name": "Global (World)",
+        "currency": "USD",
+        "symbol": "$",
+        "cpi_sources": [("fred_rate", "FPCPITOTLZGWLD")],
+        "fx_yahoo": None,
+        "fx_fred": None,
+        "fx_invert": False,
+    },
 }
 
 # Used when every live source fails, so the app still runs offline.
-# Values: (annual inflation %, local-per-USD FX rate, 12-month FX change %), snapshot of 2026-10-25
+# Values: (annual inflation %, local-per-USD FX rate, 12-month FX change %), snapshot of 2026-10-26
 FALLBACK_MACRO = {
     "US": (3.7, 1.0, 0.0),
-    "TR": (29.7, 49.73, 18.5),
-    "EU": (3.75, 0.8925, 3.6),
+    "EU": (3.75, 0.8912, 3.4),
+    "DE": (3.26, 0.8912, 3.4),
+    "FR": (3.42, 0.8912, 3.4),
+    "IT": (4.17, 0.8912, 3.4),
+    "ES": (4.96, 0.8912, 3.4),
     "GB": (3.45, 0.7477, -0.35),
+    "TR": (29.7, 49.73, 18.5),
+    "BR": (4.58, 5.05, -6.5),
+    "WORLD": (3.04, 1.0, 0.0),
 }
 
 PERIOD_MULT = {"Monthly": 1, "Quarterly": 3, "Annual": 12}
@@ -64,6 +131,9 @@ PERIOD_MULT = {"Monthly": 1, "Quarterly": 3, "Annual": 12}
 PRICE_GRID_POINTS = 2000
 MIN_PERIODS_WARN = 6
 MIN_PERIODS_FIT = 3
+
+# A CPI series ending more than this many months before the last sales month is flagged.
+CPI_STALE_MONTHS = 3
 
 DEFAULTS = {
     "cogs": 10.0,

@@ -20,6 +20,7 @@ import pandas as pd
 from sklearn.linear_model import LinearRegression
 
 from config import PERIOD_MULT, PRICE_GRID_POINTS
+from translations import Msg
 
 
 @dataclass
@@ -77,15 +78,13 @@ def fit_demand(agg: pd.DataFrame, kind: str = "linear") -> DemandModel:
         n_dropped = int((~mask).sum())
         data = data[mask]
         if n_dropped:
-            warnings.append(
-                f"{n_dropped} of {n_dropped + len(data)} periods dropped (zero sales) for the log-log fit."
-            )
+            warnings.append(Msg("warn_loglog_dropped", n_dropped=n_dropped, total=n_dropped + len(data)))
         X, y = np.log(data[cols].values), np.log(data["Quantity_Sold"].values)
     else:
         X, y = data[cols].values, data["Quantity_Sold"].values
 
     if len(data) < len(cols) + 2:
-        raise ValueError(f"Not enough usable periods ({len(data)}) to fit a {kind} demand model.")
+        raise ValueError(Msg("err_not_enough_periods", n=len(data), kind=kind))
 
     reg = LinearRegression().fit(X, y)
     model = DemandModel(
@@ -110,15 +109,9 @@ def fit_demand(agg: pd.DataFrame, kind: str = "linear") -> DemandModel:
     model.r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0.0
 
     if model.b >= 0:
-        model.warnings.append(
-            "Fitted demand slopes upward (higher price → more sales). The data can't identify the price "
-            "effect, likely because price changes coincided with other demand drivers. Treat the optimum with caution."
-        )
+        model.warnings.append(Msg("warn_upward_slope"))
     if kind == "loglog" and -1 < model.b < 0:
-        model.warnings.append(
-            f"Demand is inelastic (elasticity {model.b:.2f} > -1): under a constant-elasticity model profit keeps "
-            "rising with price, so the optimum will sit at the top of the search range."
-        )
+        model.warnings.append(Msg("warn_inelastic", b=model.b))
     return model
 
 
@@ -228,16 +221,13 @@ def run_scenario(model: DemandModel, p: ScenarioParams) -> ScenarioResult:
     ]
 
     if i == len(grid) - 1:
-        warnings.append("The optimum is at the top of the price search range. Raise 'Max price to test' or treat it as unbounded.")
+        warnings.append(Msg("warn_opt_at_top"))
     if not (model.p_min <= optimal["price"] <= model.p_max):
-        warnings.append(
-            f"Optimal price is outside the historically observed range "
-            f"({model.p_min:,.2f}–{model.p_max:,.2f}): the demand curve is being extrapolated."
-        )
+        warnings.append(Msg("warn_extrapolated", p_min=model.p_min, p_max=model.p_max))
     if optimal["profit"] < 0:
-        warnings.append("No price makes a profit under this scenario: the optimum only minimises the loss.")
+        warnings.append(Msg("warn_loss_only"))
     if bool(optimal["cap_binding"]):
-        warnings.append("Capacity is binding at the optimum: more inventory/capacity would raise profit.")
+        warnings.append(Msg("warn_cap_binding"))
 
     return ScenarioResult(
         curve=curve,

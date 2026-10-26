@@ -1,4 +1,4 @@
-"""Country macro data fetcher: inflation (FRED / ONS) and FX rates (Yahoo Finance / FRED).
+"""Country macro data fetcher: inflation (FRED / ONS / OECD) and FX rates (Yahoo Finance / FRED).
 
 Every public function returns a MacroValue and never raises, so the UI can fall back
 to manual inputs when a source is offline.
@@ -14,12 +14,14 @@ from __future__ import annotations
 import io
 from dataclasses import dataclass, field
 
+import numpy as np
 import pandas as pd
 
 from config import COUNTRY_MAP, FALLBACK_MACRO
 
 FRED_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 ONS_URL = "https://www.ons.gov.uk/economy/inflationandpriceindices/timeseries/{}/data"
+OECD_URL = "https://sdmx.oecd.org/public/rest/data/OECD.SDD.TPS,DSD_PRICES@DF_PRICES_ALL,1.0/{}"
 TIMEOUT = 20
 
 BROWSER_HEADERS = {
@@ -86,6 +88,45 @@ def parse_ons_months(months: list[dict]) -> pd.Series:
     return pd.Series(values, index=dates, name="CPI").dropna()
 
 
+def fetch_oecd_series(key: str) -> pd.Series:
+    resp = http_get(OECD_URL.format(key), params={"startPeriod": "2000-01", "format": "csvfilewithlabels"})
+    if not resp.text.startswith("STRUCTURE"):
+        raise ValueError(f"OECD returned non-CSV content for {key}")
+    return parse_oecd_csv(resp.text)
+
+
+def parse_oecd_csv(text: str) -> pd.Series:
+    df = pd.read_csv(io.StringIO(text))
+    s = pd.Series(
+        pd.to_numeric(df["OBS_VALUE"], errors="coerce").values,
+        index=pd.to_datetime(df["TIME_PERIOD"]),
+        name="CPI",
+    )
+    return s.sort_index().dropna()  # SDMX rows are not returned in date order
+
+
+def rate_to_index(rates: pd.Series) -> pd.Series:
+    """Turn annual % inflation rates into a monthly price index.
+
+    Each year's rate is an annual average, so its index level is placed on 1 July and the
+    months in between are interpolated log-linearly. deflate() then sees a smooth monthly
+    index, and yoy_inflation() on the result returns the latest annual rate exactly.
+    """
+    rates = rates.sort_index()
+    log_level = np.log1p(rates.values / 100).cumsum()
+    annual = pd.Series(log_level, index=pd.to_datetime([f"{y}-07-01" for y in rates.index.year]))
+    return np.exp(annual.resample("MS").asfreq().interpolate(method="time")).rename("CPI")
+
+
+CPI_FETCHERS = {
+    "fred": fetch_fred_series,
+    "ons": fetch_ons_series,
+    "oecd": fetch_oecd_series,
+    "fred_rate": lambda series_id: rate_to_index(fetch_fred_series(series_id)),
+}
+ANNUAL_PROVIDERS = {"fred_rate"}
+
+
 def yoy_inflation(cpi: pd.Series) -> float:
     """Year-over-year % change of the latest observation, robust to monthly or annual data."""
     latest_date = cpi.index[-1]
@@ -98,11 +139,12 @@ def yoy_inflation(cpi: pd.Series) -> float:
 def get_inflation(country: str) -> MacroValue:
     for provider, series_id in COUNTRY_MAP[country]["cpi_sources"]:
         try:
-            cpi = fetch_fred_series(series_id) if provider == "fred" else fetch_ons_series(series_id)
+            cpi = CPI_FETCHERS[provider](series_id)
+            annual = provider in ANNUAL_PROVIDERS
             return MacroValue(
                 value=yoy_inflation(cpi),
-                as_of=cpi.index[-1].strftime("%Y-%m"),
-                source=f"{provider.upper()} {series_id}",
+                as_of=cpi.index[-1].strftime("%Y" if annual else "%Y-%m"),
+                source=f"{provider.split('_')[0].upper()} {series_id}",
                 ok=True,
                 series=cpi,
             )

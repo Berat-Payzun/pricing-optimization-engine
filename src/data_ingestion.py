@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from config import MIN_PERIODS_FIT, MIN_PERIODS_WARN
+from config import CPI_STALE_MONTHS, MIN_PERIODS_FIT, MIN_PERIODS_WARN
+from translations import Msg
 
 REQUIRED = ["Date", "Price_Charged", "Quantity_Sold"]
 OPTIONAL = ["Cost_Per_Unit", "Competitor_Price"]
@@ -44,7 +45,7 @@ def load_csv(source, default_cogs: float) -> tuple[pd.DataFrame, list[str]]:
 
     missing = [c for c in REQUIRED if c not in df.columns]
     if missing:
-        raise DataValidationError(f"Missing required column(s): {', '.join(missing)}")
+        raise DataValidationError(Msg("err_missing_cols", cols=", ".join(missing)))
 
     df = df[[c for c in REQUIRED + OPTIONAL if c in df.columns]].copy()
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
@@ -56,26 +57,26 @@ def load_csv(source, default_cogs: float) -> tuple[pd.DataFrame, list[str]]:
     df = df[(df["Price_Charged"] > 0) & (df["Quantity_Sold"] >= 0)]
     dropped = n_raw - len(df)
     if dropped:
-        warnings.append(f"{dropped} of {n_raw} rows dropped (unparseable date, missing or non-positive price, negative quantity).")
+        warnings.append(Msg("warn_rows_dropped", dropped=dropped, n_raw=n_raw))
     if df.empty:
-        raise DataValidationError("No valid rows left after cleaning.")
+        raise DataValidationError(Msg("err_no_valid_rows"))
 
     df = df.sort_values("Date").reset_index(drop=True)
 
     if "Cost_Per_Unit" not in df.columns:
         df["Cost_Per_Unit"] = default_cogs
-        warnings.append("No Cost_Per_Unit column: using the default COGS for all rows.")
+        warnings.append(Msg("warn_no_cost_col"))
     else:
         n_missing = int(df["Cost_Per_Unit"].isna().sum())
         if n_missing:
             df["Cost_Per_Unit"] = df["Cost_Per_Unit"].fillna(default_cogs)
-            warnings.append(f"{n_missing} missing Cost_Per_Unit values filled with the default COGS.")
+            warnings.append(Msg("warn_cost_filled", n=n_missing))
 
     if "Competitor_Price" in df.columns:
         df["Competitor_Price"] = df["Competitor_Price"].ffill().bfill()
         if df["Competitor_Price"].isna().all():
             df = df.drop(columns="Competitor_Price")
-            warnings.append("Competitor_Price column is empty: competitor effects disabled.")
+            warnings.append(Msg("warn_comp_empty"))
 
     return df, warnings
 
@@ -102,11 +103,11 @@ def aggregate(df: pd.DataFrame, freq: str = "MS") -> tuple[pd.DataFrame, list[st
 
     n = len(out)
     if n < MIN_PERIODS_FIT:
-        raise DataValidationError(f"Only {n} month(s) of data: at least {MIN_PERIODS_FIT} are needed to fit demand.")
+        raise DataValidationError(Msg("err_too_few_months", n=n, min_n=MIN_PERIODS_FIT))
     if n < MIN_PERIODS_WARN:
-        warnings.append(f"Only {n} months of data: the demand estimate will be unreliable (6+ recommended).")
+        warnings.append(Msg("warn_few_months", n=n, min_n=MIN_PERIODS_WARN))
     if out["Price_Charged"].nunique() < 2 or out["Price_Charged"].std() < 1e-9:
-        raise DataValidationError("Price never varies in the data, so demand response to price cannot be estimated.")
+        raise DataValidationError(Msg("err_price_constant"))
     return out, warnings
 
 
@@ -122,7 +123,7 @@ def deflate(agg: pd.DataFrame, cpi: pd.Series | None) -> tuple[pd.DataFrame, lis
         if "Competitor_Price" in out:
             out["Real_Competitor_Price"] = out["Competitor_Price"]
         out["CPI_Factor"] = 1.0
-        return out, ["CPI data unavailable: demand fitted on nominal prices."]
+        return out, [Msg("warn_cpi_unavailable")]
 
     monthly_cpi = cpi.copy()
     monthly_cpi.index = monthly_cpi.index.to_period("M").start_time
@@ -135,4 +136,9 @@ def deflate(agg: pd.DataFrame, cpi: pd.Series | None) -> tuple[pd.DataFrame, lis
     out["Real_Price"] = out["Price_Charged"] * out["CPI_Factor"]
     if "Competitor_Price" in out:
         out["Real_Competitor_Price"] = out["Competitor_Price"] * out["CPI_Factor"]
-    return out, []
+
+    warnings = []
+    cpi_end, data_end = monthly_cpi.index.max(), out.index.max()
+    if (data_end.year - cpi_end.year) * 12 + data_end.month - cpi_end.month > CPI_STALE_MONTHS:
+        warnings.append(Msg("warn_cpi_stale", as_of=cpi_end.strftime("%Y-%m")))
+    return out, warnings

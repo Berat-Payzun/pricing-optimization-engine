@@ -89,3 +89,13 @@ def test_deflate_without_cpi_warns():
     out, warnings = deflate(agg, None)
     assert out["Real_Price"].iloc[0] == 1.0
     assert warnings
+
+
+def test_deflate_warns_when_cpi_ends_long_before_sales():
+    idx = pd.date_range("2024-01-01", periods=12, freq="MS")
+    agg = pd.DataFrame({"Price_Charged": 100.0, "Quantity_Sold": 1}, index=idx)
+    cpi = pd.Series([100.0, 101.0, 102.0], index=idx[:3])  # ends 2024-03, sales run to 2024-12
+    out, warnings = deflate(agg, cpi)
+    assert len(warnings) == 1 and warnings[0].key == "warn_cpi_stale"
+    assert "2024-03" in warnings[0]
+    assert out["Real_Price"].iloc[-1] == pytest.approx(100.0)

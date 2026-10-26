@@ -17,9 +17,9 @@ from config import COUNTRY_MAP, DEFAULTS, PERIOD_MULT
 from data_ingestion import DataValidationError, aggregate, deflate, load_csv
 from macro_api import get_fx, get_inflation
 from optimizer import ScenarioParams, fit_demand, run_scenario
+from translations import LANGUAGES, localize, translate
 
 SAMPLE_PATH = Path(__file__).resolve().parents[1] / "sample_data.csv"
-PERIOD_LABEL = {"Monthly": "per month", "Quarterly": "per quarter", "Annual": "per year"}
 
 # Categorical slots from the validated reference palette (fixed order), light / dark steps
 PALETTE = {
@@ -49,6 +49,22 @@ def load_data(raw: bytes, default_cogs: float):
     return agg, warnings + agg_warnings
 
 
+# ---------- language ----------
+
+# Every widget below has an explicit key and uses internal option codes, so switching the
+# language (which changes labels and format_func output) never resets the user's inputs.
+with st.sidebar:
+    lang = st.selectbox("🌐 Language / Dil / Sprache", list(LANGUAGES), format_func=LANGUAGES.get, key="lang")
+
+
+def t(key: str, **params) -> str:
+    return translate(key, lang, **params)
+
+
+def error_text(e: Exception) -> str:
+    return localize(e.args[0] if e.args else e, lang)
+
+
 # ---------- helpers ----------
 
 def colors() -> dict:
@@ -62,6 +78,10 @@ def colors() -> dict:
 def money(x: float, sym: str) -> str:
     sign = "-" if x < 0 else ""
     return f"{sign}{sym}{abs(x):,.2f}"
+
+
+def month_year(ts) -> str:
+    return f"{t('months').split(',')[ts.month - 1]} {ts.year}"
 
 
 def style(fig: go.Figure, title: str, xtitle: str, ytitle: str, height: int = 380) -> go.Figure:
@@ -85,52 +105,52 @@ def reset_shocks(infl, fx):
 
 def macro_badge(v, label: str):
     if v.ok:
-        st.badge(f"{label}: {v.source} · {v.as_of or 'live'}", icon=":material/cloud_done:", color="green")
+        st.badge(f"{label}: {v.source} · {v.as_of or t('badge_live')}", icon=":material/cloud_done:", color="green")
     else:
-        st.badge(f"{label}: offline, using manual default", icon=":material/cloud_off:", color="orange")
+        st.badge(t("badge_offline", label=label), icon=":material/cloud_off:", color="orange")
 
 
 # ---------- sidebar ----------
 
 with st.sidebar:
-    st.header("Inputs")
-    upload = st.file_uploader("Sales history CSV", type="csv",
-                              help="Columns: Date, Price_Charged, Quantity_Sold, optional Cost_Per_Unit, Competitor_Price")
+    st.header(t("sidebar_header"))
+    upload = st.file_uploader(t("upload_label"), type="csv", help=t("upload_help"), key="upload")
     if upload is None:
-        st.caption("No file uploaded: using the bundled sample data.")
-        st.download_button("Download sample CSV", SAMPLE_PATH.read_bytes(), "sample_data.csv", "text/csv")
+        st.caption(t("sample_caption"))
+        st.download_button(t("sample_download"), SAMPLE_PATH.read_bytes(), "sample_data.csv", "text/csv")
 
-    country = st.selectbox("Target country", list(COUNTRY_MAP), format_func=lambda c: COUNTRY_MAP[c]["name"])
+    country = st.selectbox(t("country_label"), list(COUNTRY_MAP), format_func=lambda c: t(f"country_{c}"), key="country")
     sym = COUNTRY_MAP[country]["symbol"]
+    is_usd = COUNTRY_MAP[country]["currency"] == "USD"  # US and Global: no FX exposure
 
-    timeframe = st.selectbox("Timeframe", list(PERIOD_MULT), help="All profit, revenue and cost figures are shown for this period.")
-    default_cogs = st.number_input(f"Default COGS per unit ({sym})", min_value=0.0, value=DEFAULTS["cogs"],
-                                   help="Used only for rows where the CSV has no Cost_Per_Unit.")
-    fixed_monthly = st.number_input(f"Monthly fixed costs ({sym})", min_value=0.0, value=DEFAULTS["fixed_costs"], step=500.0,
-                                    help="Rent, salaries, software… scaled to the selected timeframe.")
-    capacity = st.number_input(f"Capacity / inventory ceiling ({PERIOD_LABEL[timeframe]}, units)", min_value=0,
-                               value=0, step=500, help="Maximum units you can sell in the period. 0 = no limit.")
-    import_share = st.slider("Share of COGS priced in USD (%)", 0, 100, int(DEFAULTS["import_share"]),
-                             help="Only this share of unit cost moves with the exchange rate.")
-    model_kind = st.radio("Demand model", ["linear", "loglog"], horizontal=True,
-                          format_func=lambda k: "Linear" if k == "linear" else "Log-log (constant elasticity)")
-    use_real = st.toggle("Adjust history for inflation", value=True,
-                         help="Deflate historical prices with CPI before fitting demand, so price rises caused by inflation aren't mistaken for real price changes.")
+    timeframe = st.selectbox(t("timeframe_label"), list(PERIOD_MULT), format_func=lambda p: t(f"timeframe_{p}"),
+                             help=t("timeframe_help"), key="timeframe")
+    per = t(f"per_{timeframe}")
+    default_cogs = st.number_input(t("cogs_label", sym=sym), min_value=0.0, value=DEFAULTS["cogs"],
+                                   help=t("cogs_help"), key="default_cogs")
+    fixed_monthly = st.number_input(t("fixed_label", sym=sym), min_value=0.0, value=DEFAULTS["fixed_costs"], step=500.0,
+                                    help=t("fixed_help"), key="fixed_monthly")
+    capacity = st.number_input(t("capacity_label", per=per), min_value=0,
+                               value=0, step=500, help=t("capacity_help"), key="capacity")
+    import_share = st.slider(t("import_label"), 0, 100, int(DEFAULTS["import_share"]),
+                             help=t("import_help"), key="import_share")
+    model_kind = st.radio(t("model_label"), ["linear", "loglog"], horizontal=True,
+                          format_func=lambda k: t(f"model_{k}"), key="model_kind")
+    use_real = st.toggle(t("real_label"), value=True, help=t("real_help"), key="use_real")
 
 # ---------- data ----------
 
-st.title("Pricing Optimization Engine")
-st.caption(f"Finds the profit-maximizing price from your sales history and stress-tests it against "
-           f"{COUNTRY_MAP[country]['name']} inflation, exchange-rate and competitor shocks. Prices in {COUNTRY_MAP[country]['currency']}.")
+st.title(t("app_title"))
+st.caption(t("app_caption", country=t(f"country_{country}"), currency=COUNTRY_MAP[country]["currency"]))
 
 raw = upload.getvalue() if upload is not None else SAMPLE_PATH.read_bytes()
 try:
     agg, data_warnings = load_data(raw, default_cogs)
 except (DataValidationError, ValueError) as e:
-    st.error(f"Could not use this file: {e}")
+    st.error(t("err_file", error=error_text(e)))
     st.stop()
 
-with st.spinner("Fetching inflation and exchange rates…"):
+with st.spinner(t("spinner_macro")):
     infl, fx = cached_inflation(country), cached_fx(country)
 
 agg, deflate_warnings = deflate(agg, infl.series if use_real else None)
@@ -145,7 +165,7 @@ for kind in ("linear", "loglog"):
         models[kind] = e
 model = models[model_kind]
 if isinstance(model, Exception):
-    st.error(f"Could not fit the {model_kind} demand model: {model}")
+    st.error(t("err_model", model=t(f"model_{model_kind}"), error=error_text(model)))
     st.stop()
 
 current_price = float(agg["Price_Charged"].iloc[-1])
@@ -153,9 +173,9 @@ base_cogs = float(agg["Cost_Per_Unit"].iloc[-1])
 base_comp = float(agg["Real_Competitor_Price"].iloc[-1]) if model.has_comp else None
 
 with st.sidebar:
-    max_price = st.number_input(f"Max price to test ({sym})", min_value=0.01,
+    max_price = st.number_input(t("max_price_label", sym=sym), min_value=0.01,
                                 value=float(round(2 * model.p_max, 2)), key=f"max_price_{model_kind}_{len(agg)}",
-                                help="Upper bound of the price search. Default: 2× the highest historical price.")
+                                help=t("max_price_help"))
 
 # Live macro values become the slider defaults, refreshed whenever the country changes
 if st.session_state.get("shock_country") != country:
@@ -168,159 +188,154 @@ charts_area = st.container()
 # ---------- shock sliders (rendered below the charts) ----------
 
 st.divider()
-st.subheader("Macro shock simulation")
-st.caption("Defaults come from live data: 12-month CPI inflation and the 12-month change in the local-currency/USD rate. "
-           "Move them to test what-if scenarios.")
+st.subheader(t("shock_header"))
+st.caption(t("shock_caption"))
 s1, s2, s3, s4 = st.columns([3, 3, 3, 1.4], vertical_alignment="bottom")
 with s1:
-    inflation = st.slider("Country inflation rate (%)", -10.0, 100.0, step=0.5, key="shock_infl",
-                          help="Raises COGS and fixed costs.")
+    inflation = st.slider(t("shock_infl"), -10.0, 100.0, step=0.5, key="shock_infl", help=t("shock_infl_help"))
 with s2:
-    fx_shift = st.slider("Exchange rate shift (%)", -50.0, 100.0, step=0.5, key="shock_fx",
-                         help="Change in local currency per USD. Positive = local currency weakens, so imported inputs cost more.",
-                         disabled=country == "US")
+    fx_shift = st.slider(t("shock_fx"), -50.0, 100.0, step=0.5, key="shock_fx", help=t("shock_fx_help"),
+                         disabled=is_usd)
 with s3:
-    comp_shift = st.slider("Competitor price change (%)", -50.0, 50.0, step=1.0, key="shock_comp",
+    comp_shift = st.slider(t("shock_comp"), -50.0, 50.0, step=1.0, key="shock_comp",
                            disabled=not model.has_comp,
-                           help=None if model.has_comp else "Needs a Competitor_Price column in the CSV.")
+                           help=None if model.has_comp else t("shock_comp_help"))
 with s4:
-    st.button("Reset to live data", on_click=reset_shocks, args=(infl, fx), width="stretch")
+    st.button(t("shock_reset"), on_click=reset_shocks, args=(infl, fx), width="stretch")
 if not model.has_comp:
-    st.caption("Competitor slider disabled: the uploaded data has no Competitor_Price column, so cross-price effects can't be estimated.")
+    st.caption(t("shock_comp_disabled"))
 
 # ---------- scenarios ----------
 
 common = dict(base_cogs=base_cogs, fixed_monthly=fixed_monthly, capacity=capacity or np.inf, period=timeframe,
               import_share=import_share / 100, base_comp_price=base_comp, current_price=current_price, max_price=max_price)
 result = run_scenario(model, ScenarioParams(**common, inflation=inflation / 100,
-                                            fx_shift=(fx_shift if country != "US" else 0) / 100, comp_shift=comp_shift / 100))
+                                            fx_shift=(0 if is_usd else fx_shift) / 100, comp_shift=comp_shift / 100))
 today = run_scenario(model, ScenarioParams(**common))
 
 opt, base = result.optimal, result.baseline
-per = PERIOD_LABEL[timeframe]
 
 # ---------- metrics ----------
 
 with metrics_area:
     c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("Optimal price", money(opt["price"], sym), f"{(opt['price'] / current_price - 1) * 100:+.1f}% vs current",
-              help=f"Current price: {money(current_price, sym)}")
-    c2.metric(f"Peak net profit ({per})", money(opt["profit"], sym), money(opt["profit"] - base["profit"], sym),
-              help=f"Delta vs keeping the current price under the same scenario ({money(base['profit'], sym)}).")
-    c3.metric("Price elasticity at optimum", f"{result.ped_opt:.2f}",
-              help="% change in quantity for a 1% price change. Below -1 = elastic.")
+    c1.metric(t("metric_opt_price"), money(opt["price"], sym), t("metric_opt_delta", pct=(opt["price"] / current_price - 1) * 100),
+              help=t("metric_opt_help", price=money(current_price, sym)))
+    c2.metric(t("metric_profit", per=per), money(opt["profit"], sym), money(opt["profit"] - base["profit"], sym),
+              help=t("metric_profit_help", profit=money(base["profit"], sym)))
+    c3.metric(t("metric_ped"), f"{result.ped_opt:.2f}", help=t("metric_ped_help"))
     with c4:
-        st.metric("Demand fit R²", f"{model.r2:.2f}", help="Share of month-to-month sales variation the model explains.")
+        st.metric(t("metric_r2"), f"{model.r2:.2f}", help=t("metric_r2_help"))
         if model.kind == "loglog" and model.n_dropped:
-            st.badge(f"{model.n_dropped} of {model.n + model.n_dropped} periods dropped (zero sales)",
+            st.badge(t("badge_periods_dropped", n_dropped=model.n_dropped, total=model.n + model.n_dropped),
                      icon=":material/warning:", color="orange")
     with c5:
-        st.metric("CPI inflation (YoY)", f"{infl.value:.1f}%")
-        macro_badge(infl, "CPI")
+        st.metric(t("metric_cpi"), f"{infl.value:.1f}%")
+        macro_badge(infl, t("badge_cpi"))
     with c6:
-        st.metric(f"FX ({COUNTRY_MAP[country]['currency']} per USD)", f"{fx.value:,.4f}",
-                  f"{fx.change_pct:+.1f}% 12m" if fx.change_pct is not None and country != "US" else None,
+        st.metric(t("metric_fx", currency=COUNTRY_MAP[country]["currency"]), f"{fx.value:,.4f}",
+                  t("metric_fx_delta", pct=fx.change_pct) if fx.change_pct is not None and not is_usd else None,
                   delta_color="inverse")
-        macro_badge(fx, "FX")
+        macro_badge(fx, t("badge_fx"))
 
     for w in model.warnings + result.warnings:
-        st.warning(w, icon=":material/warning:")
+        st.warning(localize(w, lang), icon=":material/warning:")
 
 # ---------- charts ----------
 
 col = colors()
 curve = result.curve
+units = t("units")
 
 with charts_area:
     fig = go.Figure()
     cap = curve[curve["cap_binding"]]
     if not cap.empty:
         fig.add_vrect(x0=cap["price"].min(), x1=cap["price"].max(), fillcolor=col["band"], line_width=0,
-                      annotation_text="capacity binding", annotation_position="top left")
-    fig.add_trace(go.Scatter(x=curve["price"], y=curve["profit"], name="Net profit", line=dict(color=col["s1"], width=2.5)))
-    fig.add_trace(go.Scatter(x=curve["price"], y=curve["revenue"], name="Revenue", line=dict(color=col["s2"], width=2)))
-    fig.add_trace(go.Scatter(x=curve["price"], y=curve["total_cost"], name="Total cost", line=dict(color=col["s3"], width=2)))
+                      annotation_text=t("chart_capacity"), annotation_position="top left")
+    fig.add_trace(go.Scatter(x=curve["price"], y=curve["profit"], name=t("chart_net_profit"), line=dict(color=col["s1"], width=2.5)))
+    fig.add_trace(go.Scatter(x=curve["price"], y=curve["revenue"], name=t("chart_revenue"), line=dict(color=col["s2"], width=2)))
+    fig.add_trace(go.Scatter(x=curve["price"], y=curve["total_cost"], name=t("chart_total_cost"), line=dict(color=col["s3"], width=2)))
     fig.add_hline(y=0, line=dict(color=col["muted"], width=1))
     fig.add_vline(x=opt["price"], line=dict(color=col["s1"], width=1.5, dash="dot"),
-                  annotation_text=f"Optimal {money(opt['price'], sym)}", annotation_position="top right")
+                  annotation_text=t("chart_optimal", price=money(opt["price"], sym)), annotation_position="top right")
     fig.add_vline(x=current_price, line=dict(color=col["muted"], width=1.5, dash="dash"),
-                  annotation_text=f"Current {money(current_price, sym)}", annotation_position="bottom right")
-    fig.add_trace(go.Scatter(x=[opt["price"]], y=[opt["profit"]], mode="markers", name="Peak profit",
+                  annotation_text=t("chart_current", price=money(current_price, sym)), annotation_position="bottom right")
+    fig.add_trace(go.Scatter(x=[opt["price"]], y=[opt["profit"]], mode="markers", name=t("chart_peak"),
                              marker=dict(color=col["s1"], size=11, line=dict(color="white", width=2)),
                              showlegend=False, hoverinfo="skip"))
     for be in result.break_evens:
         fig.add_trace(go.Scatter(x=[be], y=[0], mode="markers", showlegend=False, hoverinfo="skip",
                                  marker=dict(color=col["muted"], size=9, symbol="diamond")))
-    style(fig, f"Profit, revenue and cost vs price ({per})", f"Price ({sym})", f"{sym} {per}", height=460)
+    style(fig, t("chart_main_title", per=per), t("axis_price", sym=sym), f"{sym} {per}", height=460)
     fig.update_traces(hovertemplate=f"{sym}%{{y:,.0f}}", selector=dict(mode="lines"))
     st.plotly_chart(fig, width="stretch")
     if result.break_evens:
-        st.caption("Break-even price(s): " + ", ".join(money(b, sym) for b in result.break_evens)
-                   + f" · Unit cost under scenario: {money(result.cogs_final, sym)} · Fixed costs: {money(result.fixed_final, sym)} {per}")
+        st.caption(t("caption_break_even", prices=", ".join(money(b, sym) for b in result.break_evens),
+                     cogs=money(result.cogs_final, sym), fixed=money(result.fixed_final, sym), per=per))
 
     left, right = st.columns(2)
     with left:
         fig = go.Figure()
         price_col = "Real_Price"
         fig.add_trace(go.Scatter(x=agg[price_col], y=agg["Quantity_Sold"] * PERIOD_MULT[timeframe], mode="markers",
-                                 name="Observed months", marker=dict(color=col["s2"], size=9, line=dict(color="white", width=1)),
-                                 hovertemplate=f"{sym}%{{x:,.2f}} → %{{y:,.0f}} units<extra></extra>"))
-        fig.add_trace(go.Scatter(x=curve["price"], y=curve["q_demand"], name="Fitted demand", line=dict(color=col["s1"], width=2),
-                                 hovertemplate="%{y:,.0f} units<extra></extra>"))
-        style(fig, f"Demand curve: units sold {per}", f"Price ({sym}, {'real' if use_real else 'nominal'})", "Units")
+                                 name=t("chart_observed"), marker=dict(color=col["s2"], size=9, line=dict(color="white", width=1)),
+                                 hovertemplate=f"{sym}%{{x:,.2f}} → %{{y:,.0f}} {units}<extra></extra>"))
+        fig.add_trace(go.Scatter(x=curve["price"], y=curve["q_demand"], name=t("chart_fitted"), line=dict(color=col["s1"], width=2),
+                                 hovertemplate=f"%{{y:,.0f}} {units}<extra></extra>"))
+        style(fig, t("chart_demand_title", per=per),
+              t("axis_price_kind", sym=sym, kind=t("price_real" if use_real else "price_nominal")), t("axis_units"))
         fig.update_layout(hovermode="closest")
         st.plotly_chart(fig, width="stretch")
     with right:
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=curve["price"], y=today.curve["profit"], name="Today's costs, no shock",
+        fig.add_trace(go.Scatter(x=curve["price"], y=today.curve["profit"], name=t("chart_today"),
                                  line=dict(color=col["muted"], width=2, dash="dash")))
-        fig.add_trace(go.Scatter(x=curve["price"], y=curve["profit"], name="Scenario", line=dict(color=col["s1"], width=2.5)))
+        fig.add_trace(go.Scatter(x=curve["price"], y=curve["profit"], name=t("chart_scenario"), line=dict(color=col["s1"], width=2.5)))
         fig.add_hline(y=0, line=dict(color=col["muted"], width=1))
-        style(fig, f"Shock impact on net profit ({per})", f"Price ({sym})", f"{sym} {per}")
+        style(fig, t("chart_shock_title", per=per), t("axis_price", sym=sym), f"{sym} {per}")
         fig.update_traces(hovertemplate=f"{sym}%{{y:,.0f}}")
         st.plotly_chart(fig, width="stretch")
         d_price = opt["price"] - today.optimal["price"]
         d_profit = opt["profit"] - today.optimal["profit"]
-        st.caption(f"Scenario moves the optimal price by {money(d_price, sym)} and peak profit by {money(d_profit, sym)} {per}.")
+        st.caption(t("caption_shock", d_price=money(d_price, sym), d_profit=money(d_profit, sym), per=per))
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=agg.index, y=agg["Price_Charged"], name="Your price", line=dict(color=col["s1"], width=2)))
+    fig.add_trace(go.Scatter(x=agg.index, y=agg["Price_Charged"], name=t("chart_your_price"), line=dict(color=col["s1"], width=2)))
     if "Competitor_Price" in agg:
-        fig.add_trace(go.Scatter(x=agg.index, y=agg["Competitor_Price"], name="Competitor price", line=dict(color=col["s2"], width=2)))
+        fig.add_trace(go.Scatter(x=agg.index, y=agg["Competitor_Price"], name=t("chart_comp_price"), line=dict(color=col["s2"], width=2)))
     if use_real and infl.series is not None:
-        fig.add_trace(go.Scatter(x=agg.index, y=agg["Real_Price"], name="Your price (inflation-adjusted)",
+        fig.add_trace(go.Scatter(x=agg.index, y=agg["Real_Price"], name=t("chart_real_price"),
                                  line=dict(color=col["s3"], width=2, dash="dot")))
-    style(fig, "Price history (monthly average)", "", f"Price ({sym})", height=340)
+    style(fig, t("chart_history_title"), "", t("axis_price", sym=sym), height=340)
     fig.update_traces(hovertemplate=f"{sym}%{{y:,.2f}}")
     st.plotly_chart(fig, width="stretch")
 
 # ---------- details ----------
 
-with st.expander("Model details and data notes"):
+with st.expander(t("details_expander")):
     m1, m2 = st.columns(2)
     with m1:
-        st.markdown("**Fitted demand (monthly units)**")
+        st.markdown(f"**{t('details_fitted')}**")
         st.code(model.equation(), language=None)
+        columns = [t("col_model"), t("col_r2"), t("col_periods"), t("col_coef")]
         rows = []
         for kind, m in models.items():
-            if isinstance(m, Exception):
-                rows.append({"Model": kind, "R²": None, "Periods used": None, "Own-price coef": None})
-            else:
-                rows.append({"Model": kind, "R²": round(m.r2, 3), "Periods used": m.n, "Own-price coef": round(m.b, 3)})
+            fit = (None, None, None) if isinstance(m, Exception) else (round(m.r2, 3), m.n, round(m.b, 3))
+            rows.append(dict(zip(columns, (t(f"model_{kind}"), *fit))))
         st.dataframe(pd.DataFrame(rows), hide_index=True)
         xed = result.xed_opt
-        st.markdown(f"- Elasticity at current price: **{result.ped_current:.2f}**\n"
-                    f"- Cross-price elasticity at optimum: **{xed:.2f}**" if xed is not None else
-                    f"- Elasticity at current price: **{result.ped_current:.2f}**\n- Cross-price elasticity: n/a (no competitor data)")
-        st.markdown(f"- Observed real price range: {money(model.p_min, sym)} – {money(model.p_max, sym)}")
+        xed_line = t("details_xed", value=f"{xed:.2f}") if xed is not None else t("details_xed_na")
+        st.markdown(f"- {t('details_ped_current', value=f'{result.ped_current:.2f}')}\n- {xed_line}")
+        st.markdown(f"- {t('details_price_range', low=money(model.p_min, sym), high=money(model.p_max, sym))}")
     with m2:
-        st.markdown("**Data notes**")
+        st.markdown(f"**{t('details_notes')}**")
         notes = data_warnings + deflate_warnings + model.warnings
         if notes:
             for n in notes:
-                st.markdown(f"- {n}")
+                st.markdown(f"- {localize(n, lang)}")
         else:
-            st.markdown("- No data issues found.")
-        st.markdown(f"- {len(agg)} months of data, {agg.index.min():%b %Y} – {agg.index.max():%b %Y}")
-    st.markdown("**Monthly aggregated data**")
+            st.markdown(f"- {t('details_no_issues')}")
+        st.markdown(f"- {t('details_months', n=len(agg), start=month_year(agg.index.min()), end=month_year(agg.index.max()))}")
+    st.markdown(f"**{t('details_agg')}**")
     st.dataframe(agg.round(2), width="stretch")
