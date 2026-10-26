@@ -161,3 +161,66 @@ def test_inelastic_loglog_hits_upper_bound_warning():
     r = run_scenario(m, params(m, base_comp_price=None))
     assert r.optimal["price"] == pytest.approx(r.curve["price"].iloc[-1])
     assert any("top of the price search range" in w for w in r.warnings)
+
+
+def seasonal_agg(n=36, seed=1):
+    """Demand with a strong month-of-year pattern, and prices raised in the busy months,
+    so a model without seasonality mistakes the seasonal peak for weak price sensitivity."""
+    rng = np.random.default_rng(seed)
+    idx = pd.date_range("2023-01-01", periods=n, freq="MS")
+    season = 500 * np.sin(2 * np.pi * (idx.month.values - 1) / 12)
+    p = 45 + 0.02 * season + rng.uniform(-6, 6, n)
+    pc = rng.uniform(40, 55, n)
+    q = A + B * p + C * pc + season
+    return pd.DataFrame({"Price_Charged": p, "Competitor_Price": pc, "Quantity_Sold": q, "Cost_Per_Unit": 20.0}, index=idx)
+
+
+def test_seasonal_fit_separates_season_from_price():
+    agg = seasonal_agg()
+    plain, seasonal = fit_demand(agg, "linear"), fit_demand(agg, "linear", seasonal=True)
+    assert seasonal.b == pytest.approx(B, rel=0.02)
+    assert abs(plain.b - B) > 0.1 * abs(B)  # biased without seasonality
+    assert seasonal.r2 > plain.r2 and seasonal.r2 > 0.999
+    assert seasonal.season is not None and seasonal.season.mean() == pytest.approx(0, abs=1e-9)
+    # Effects recover the true pattern (true effects are mean zero over a full year)
+    true = 500 * np.sin(2 * np.pi * np.arange(12) / 12)
+    assert seasonal.season == pytest.approx(true, abs=1.0)
+    assert seasonal.predict(45, 50, month=4) - seasonal.predict(45, 50) == pytest.approx(true[3], abs=1.0)
+    assert "s(month)" in seasonal.equation()
+
+
+def test_seasonal_needs_two_years():
+    m = fit_demand(seasonal_agg(n=18), "linear", seasonal=True)
+    assert m.season is None
+    assert any(w.key == "warn_season_short" for w in m.warnings)
+
+
+def test_bootstrap_range_brackets_the_optimum():
+    from optimizer import optimal_price_range
+
+    agg = synthetic_agg(noise=0.05)
+    m = fit_demand(agg, "linear")
+    p = params(m)
+    low, high = optimal_price_range(agg, "linear", p, seed=3)
+    assert low < run_scenario(m, p).optimal["price"] < high
+    # Less noise, narrower range
+    low2, high2 = optimal_price_range(synthetic_agg(noise=0.005), "linear", p, seed=3)
+    assert high2 - low2 < (high - low) / 3
+
+
+def test_bootstrap_matches_full_refit_path():
+    """The fast bootstrap must agree with refitting via fit_demand + run_scenario."""
+    from optimizer import optimal_price_range
+
+    agg = seasonal_agg(n=30)
+    p = params(None, max_price=150)
+    rng = np.random.default_rng(7)
+    slow = []
+    for _ in range(60):
+        sample = agg.iloc[rng.integers(0, len(agg), len(agg))]
+        try:
+            slow.append(run_scenario(fit_demand(sample, "linear", True), p).optimal["price"])
+        except ValueError:
+            pass
+    fast = optimal_price_range(agg, "linear", p, seasonal=True, n=60, seed=7)
+    assert fast == pytest.approx(tuple(np.percentile(slow, [5, 95])), rel=1e-6)

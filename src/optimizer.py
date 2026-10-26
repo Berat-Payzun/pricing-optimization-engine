@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
-from config import PERIOD_MULT, PRICE_GRID_POINTS
+from config import BOOTSTRAP_SAMPLES, PERIOD_MULT, PRICE_GRID_POINTS, SEASONAL_MIN_MONTHS
 from translations import Msg
 
 
@@ -36,35 +36,57 @@ class DemandModel:
     p_min: float
     p_max: float
     warnings: list[str] = field(default_factory=list)
+    # Month-of-year effects (Jan..Dec, mean zero; in log units for log-log) or None. The
+    # intercept is for an average month, so the optimizer prices for a typical month.
+    season: np.ndarray | None = None
 
     @property
     def has_comp(self) -> bool:
         return self.c is not None
 
-    def predict(self, price, comp_price: float | None = None) -> np.ndarray:
-        """Monthly quantity demanded at `price` (scalar or array)."""
+    def predict(self, price, comp_price: float | None = None, month: int | None = None) -> np.ndarray:
+        """Monthly quantity demanded at `price` (scalar or array), for an average month
+        unless `month` (1-12) is given and the model is seasonal."""
         p = np.asarray(price, dtype=float)
+        s = self.season[month - 1] if self.season is not None and month is not None else 0.0
         if self.kind == "linear":
-            q = self.intercept + self.b * p
+            q = self.intercept + s + self.b * p
             if self.has_comp:
                 q = q + self.c * comp_price
             return np.maximum(0.0, q)
-        log_q = self.intercept + self.b * np.log(np.maximum(p, 1e-9))
+        log_q = self.intercept + s + self.b * np.log(np.maximum(p, 1e-9))
         if self.has_comp:
             log_q = log_q + self.c * np.log(max(comp_price, 1e-9))
         return np.exp(log_q)
 
     def equation(self, symbol: str = "") -> str:
-        comp = self.has_comp
+        comp, season = self.has_comp, " + s(month)" if self.season is not None else ""
         if self.kind == "linear":
             s = f"Q = {self.intercept:,.2f} {self.b:+,.3f}·P"
-            return s + (f" {self.c:+,.3f}·P_comp" if comp else "")
+            return s + (f" {self.c:+,.3f}·P_comp" if comp else "") + season
         s = f"ln Q = {self.intercept:,.3f} {self.b:+,.3f}·ln P"
-        return s + (f" {self.c:+,.3f}·ln P_comp" if comp else "")
+        return s + (f" {self.c:+,.3f}·ln P_comp" if comp else "") + season
 
 
-def fit_demand(agg: pd.DataFrame, kind: str = "linear") -> DemandModel:
-    """OLS fit of monthly quantity on real price (and real competitor price if present)."""
+def month_dummies(index: pd.DatetimeIndex) -> np.ndarray:
+    """One column per month Feb..Dec (January is the base)."""
+    return (np.asarray(index.month)[:, None] == np.arange(2, 13)).astype(float)
+
+
+@dataclass
+class _Design:
+    """Regression inputs shared by fit_demand and the bootstrap."""
+    data: pd.DataFrame
+    price_col: str
+    comp_col: str | None
+    X: np.ndarray
+    y: np.ndarray
+    n_dropped: int
+    use_season: bool
+    warnings: list[str]
+
+
+def _design(agg: pd.DataFrame, kind: str, seasonal: bool) -> _Design:
     price_col = "Real_Price" if "Real_Price" in agg else "Price_Charged"
     comp_col = "Real_Competitor_Price" if "Real_Competitor_Price" in agg else (
         "Competitor_Price" if "Competitor_Price" in agg else None
@@ -84,26 +106,52 @@ def fit_demand(agg: pd.DataFrame, kind: str = "linear") -> DemandModel:
     else:
         X, y = data[cols].values, data["Quantity_Sold"].values
 
-    if len(data) < len(cols) + 2:
-        raise ValueError(Msg("err_not_enough_periods", n=len(data), kind=kind))
+    use_season = seasonal and len(data) >= SEASONAL_MIN_MONTHS
+    if seasonal and not use_season:
+        warnings.append(Msg("warn_season_short", n=len(data), min_n=SEASONAL_MIN_MONTHS))
+    if use_season:
+        X = np.hstack([X, month_dummies(data.index)])
 
-    reg = LinearRegression().fit(X, y)
-    model = DemandModel(
+    if len(data) < X.shape[1] + 2:
+        raise ValueError(Msg("err_not_enough_periods", n=len(data), kind=kind))
+    return _Design(data, price_col, comp_col, X, y, n_dropped, use_season, warnings)
+
+
+def _model(d: _Design, kind: str, intercept: float, coef: np.ndarray, warnings: list[str]) -> DemandModel:
+    """Build a DemandModel from regression coefficients (price, [competitor], [Feb..Dec])."""
+    n_prices = 2 if d.comp_col else 1
+    season = None
+    if d.use_season:
+        effects = np.concatenate([[0.0], coef[n_prices:]])  # January = base month
+        intercept += float(effects.mean())
+        season = effects - effects.mean()
+    return DemandModel(
         kind=kind,
-        intercept=float(reg.intercept_),
-        b=float(reg.coef_[0]),
-        c=float(reg.coef_[1]) if comp_col else None,
+        intercept=float(intercept),
+        b=float(coef[0]),
+        c=float(coef[1]) if d.comp_col else None,
         r2=0.0,
-        n=len(data),
-        n_dropped=n_dropped,
-        p_min=float(data[price_col].min()),
-        p_max=float(data[price_col].max()),
+        n=len(d.data),
+        n_dropped=d.n_dropped,
+        p_min=float(d.data[d.price_col].min()),
+        p_max=float(d.data[d.price_col].max()),
         warnings=warnings,
+        season=season,
     )
 
+
+def fit_demand(agg: pd.DataFrame, kind: str = "linear", seasonal: bool = False) -> DemandModel:
+    """OLS fit of monthly quantity on real price (and real competitor price if present),
+    optionally with month-of-year effects so seasonal swings aren't read as price effects."""
+    d = _design(agg, kind, seasonal)
+    reg = LinearRegression().fit(d.X, d.y)
+    model = _model(d, kind, reg.intercept_, reg.coef_, d.warnings)
+    data, price_col, comp_col = d.data, d.price_col, d.comp_col
+
     q_actual = data["Quantity_Sold"].values
+    comps = data[comp_col] if comp_col else [None] * len(data)
     q_hat = np.array([
-        model.predict(p, pc) for p, pc in zip(data[price_col], data[comp_col] if comp_col else [None] * len(data))
+        model.predict(p, pc, month) for p, pc, month in zip(data[price_col], comps, data.index.month)
     ])
     ss_res = float(((q_actual - q_hat) ** 2).sum())
     ss_tot = float(((q_actual - q_actual.mean()) ** 2).sum())
@@ -191,25 +239,35 @@ def _economics(model, price, comp_price, cogs, fixed, capacity, mult, level=1.0)
     }
 
 
+@dataclass
+class _Setup:
+    level: float  # scenario price level relative to today's money (the demand model's units)
+    comp_real: float | None
+    cogs_final: float
+    fixed_final: float
+    grid: np.ndarray
+
+
+def _setup(has_comp: bool, p: ScenarioParams) -> _Setup:
+    level = 1 + p.inflation if p.price_passthrough else 1.0
+    # Step 4: competitor shock. comp_real stays in today's money; under pass-through the
+    # competitor's nominal price rises with the price level too.
+    comp_real = p.base_comp_price * (1 + p.comp_shift) if has_comp else None
+    # Steps 6-7
+    cogs_final, fixed_final = shocked_costs(p)
+    # Step 8: grid scales with price level, so it works for $5 items and ₺50,000 items alike
+    low = max(0.01, min(cogs_final, p.current_price) * 0.9)
+    high = max(p.max_price, low * 1.5)
+    return _Setup(level, comp_real, cogs_final, fixed_final, np.linspace(low, high, PRICE_GRID_POINTS))
+
+
 def run_scenario(model: DemandModel, p: ScenarioParams) -> ScenarioResult:
     mult = PERIOD_MULT[p.period]
     warnings: list[str] = []
 
-    # Price level of the scenario relative to today's money (the demand model's units)
-    level = 1 + p.inflation if p.price_passthrough else 1.0
-
-    # Step 4: competitor shock. comp_real stays in today's money; under pass-through the
-    # competitor's nominal price rises with the price level too.
-    comp_real = p.base_comp_price * (1 + p.comp_shift) if model.has_comp else None
+    s = _setup(model.has_comp, p)
+    level, comp_real, cogs_final, fixed_final, grid = s.level, s.comp_real, s.cogs_final, s.fixed_final, s.grid
     comp_price = comp_real * level if model.has_comp else None
-
-    # Steps 6-7
-    cogs_final, fixed_final = shocked_costs(p)
-
-    # Step 8: grid scales with price level, so it works for $5 items and ₺50,000 items alike
-    low = max(0.01, min(cogs_final, p.current_price) * 0.9)
-    high = max(p.max_price, low * 1.5)
-    grid = np.linspace(low, high, PRICE_GRID_POINTS)
 
     curve = pd.DataFrame(_economics(model, grid, comp_real, cogs_final, fixed_final, p.capacity, mult, level))
     i = int(curve["profit"].idxmax())
@@ -256,3 +314,33 @@ def run_scenario(model: DemandModel, p: ScenarioParams) -> ScenarioResult:
         break_evens=break_evens,
         warnings=warnings,
     )
+
+
+def optimal_price_range(agg: pd.DataFrame, kind: str, params: ScenarioParams, seasonal: bool = False,
+                        n: int = BOOTSTRAP_SAMPLES, coverage: float = 0.9, seed: int = 0) -> tuple[float, float] | None:
+    """Bootstrap range of P*: refit demand on months resampled with replacement and re-run
+    the scenario each time. Returns the central `coverage` interval, or None if fewer than
+    half of the resamples could be fitted (e.g. too little price variation)."""
+    d = _design(agg, kind, seasonal)  # raises like fit_demand if the data can't be fitted
+    s = _setup(d.comp_col is not None, params)
+    mult = PERIOD_MULT[params.period]
+    rng = np.random.default_rng(seed)
+    prices = []
+    for _ in range(n):
+        idx = rng.integers(0, len(d.y), len(d.y))
+        X, y = d.X[idx], d.y[idx]
+        if np.ptp(X[:, 0]) < 1e-12:  # no price variation in this resample
+            continue
+        # Centred least squares, as LinearRegression does: when a resample misses some months
+        # the dummies and intercept are collinear, and this picks the same solution sklearn would.
+        x_mean, y_mean = X.mean(axis=0), y.mean()
+        coef = np.linalg.lstsq(X - x_mean, y - y_mean, rcond=None)[0]
+        model = _model(d, kind, y_mean - x_mean @ coef, coef, [])
+        profit = _economics(model, s.grid, s.comp_real, s.cogs_final, s.fixed_final, params.capacity, mult,
+                            s.level)["profit"]
+        prices.append(s.grid[int(np.argmax(profit))])
+    if len(prices) < n / 2:
+        return None
+    tail = (1 - coverage) / 2 * 100
+    low, high = np.percentile(prices, [tail, 100 - tail])
+    return float(low), float(high)

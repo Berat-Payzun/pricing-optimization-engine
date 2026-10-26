@@ -16,11 +16,45 @@ LANGUAGES = {"en": "🇬🇧 English", "tr": "🇹🇷 Türkçe", "de": "🇩�
 STRINGS: dict[str, dict[str, str]] = {
     # ---------- sidebar ----------
     "sidebar_header": {"en": "Inputs", "tr": "Girdiler", "de": "Eingaben"},
-    "upload_label": {"en": "Sales history CSV", "tr": "Satış geçmişi (CSV)", "de": "Verkaufshistorie (CSV)"},
+    "upload_label": {
+        "en": "Sales history (CSV or Excel)",
+        "tr": "Satış geçmişi (CSV veya Excel)",
+        "de": "Verkaufshistorie (CSV oder Excel)",
+    },
     "upload_help": {
-        "en": "Columns: Date, Price_Charged, Quantity_Sold, optional Cost_Per_Unit, Competitor_Price",
-        "tr": "Sütunlar: Date, Price_Charged, Quantity_Sold; isteğe bağlı Cost_Per_Unit, Competitor_Price",
-        "de": "Spalten: Date, Price_Charged, Quantity_Sold; optional Cost_Per_Unit, Competitor_Price",
+        "en": "Columns: Date, Price_Charged, Quantity_Sold; optional Cost_Per_Unit, Competitor_Price, Product. "
+              "Turkish and German headers work too (e.g. Tarih, Fiyat, Adet / Datum, Preis, Menge).",
+        "tr": "Sütunlar: Date, Price_Charged, Quantity_Sold; isteğe bağlı Cost_Per_Unit, Competitor_Price, Product. "
+              "Türkçe ve Almanca başlıklar da kullanılabilir (ör. Tarih, Fiyat, Adet / Datum, Preis, Menge).",
+        "de": "Spalten: Date, Price_Charged, Quantity_Sold; optional Cost_Per_Unit, Competitor_Price, Product. "
+              "Deutsche und türkische Spaltennamen funktionieren auch (z. B. Datum, Preis, Menge / Tarih, Fiyat, Adet).",
+    },
+    "product_label": {"en": "Product", "tr": "Ürün", "de": "Produkt"},
+    "product_help": {
+        "en": "Your file has a product column: pick the product to analyse.",
+        "tr": "Dosyanızda ürün sütunu var: analiz edilecek ürünü seçin.",
+        "de": "Ihre Datei hat eine Produktspalte: Wählen Sie das zu analysierende Produkt.",
+    },
+    "cost_override_label": {
+        "en": "Unit cost override ({sym})",
+        "tr": "Birim maliyeti elle gir ({sym})",
+        "de": "Stückkosten überschreiben ({sym})",
+    },
+    "cost_override_help": {
+        "en": "Replaces the latest Cost_Per_Unit from the data, to test 'what if my unit cost were X?'. 0 = use the data.",
+        "tr": "Verideki son Cost_Per_Unit değerinin yerine geçer; 'birim maliyetim X olsaydı?' sorusunu test etmek için. "
+              "0 = veriyi kullan.",
+        "de": "Ersetzt die letzten Cost_Per_Unit aus den Daten, um „Was wäre, wenn meine Stückkosten X wären?“ zu testen. "
+              "0 = Daten verwenden.",
+    },
+    "season_label": {"en": "Adjust for seasonality", "tr": "Mevsimselliğe göre düzelt", "de": "Saisonbereinigung"},
+    "season_help": {
+        "en": "Adds month-of-year effects to the demand fit, so seasonal swings (e.g. a December peak) aren't "
+              "mistaken for price effects. On by default with {min_n}+ months of data.",
+        "tr": "Talep modeline ay etkileri ekler; böylece mevsimsel dalgalanmalar (ör. Aralık zirvesi) fiyat etkisi "
+              "sanılmaz. {min_n}+ aylık veri varsa varsayılan olarak açıktır.",
+        "de": "Ergänzt das Nachfragemodell um Monatseffekte, damit saisonale Schwankungen (z. B. ein Dezember-Hoch) "
+              "nicht als Preiseffekte gelten. Ab {min_n} Monaten Daten standardmäßig aktiv.",
     },
     "sample_caption": {
         "en": "No file uploaded: using the bundled sample data.",
@@ -341,7 +375,63 @@ STRINGS: dict[str, dict[str, str]] = {
         "tr": "Oca,Şub,Mar,Nis,May,Haz,Tem,Ağu,Eyl,Eki,Kas,Ara",
         "de": "Jan,Feb,Mär,Apr,Mai,Jun,Jul,Aug,Sep,Okt,Nov,Dez",
     },
+    # ---------- uncertainty range ----------
+    "metric_opt_range": {"en": "90% range: {low} – {high}", "tr": "%90 aralık: {low} – {high}", "de": "90%-Bereich: {low} – {high}"},
+    "metric_opt_range_help": {
+        "en": "Bootstrap: the demand model was refitted on {n} resampled versions of your history, and 90% of the "
+              "resulting optimal prices fell in this range. A wide range means the data pins the price down only weakly.",
+        "tr": "Bootstrap: talep modeli geçmiş verinizin yeniden örneklenmiş {n} versiyonuyla tekrar kuruldu; çıkan "
+              "optimum fiyatların %90'ı bu aralıkta. Geniş bir aralık, verinin fiyatı zayıf belirlediği anlamına gelir.",
+        "de": "Bootstrap: Das Nachfragemodell wurde auf {n} neu gezogenen Versionen Ihrer Historie geschätzt; 90 % der "
+              "optimalen Preise lagen in diesem Bereich. Ein breiter Bereich heißt, dass die Daten den Preis nur "
+              "schwach festlegen.",
+    },
+    "chart_range": {"en": "90% range", "tr": "%90 aralık", "de": "90%-Bereich"},
+    # ---------- export ----------
+    "export_header": {"en": "Export", "tr": "Dışa aktar", "de": "Export"},
+    "export_caption": {
+        "en": "Results for the current settings, including the shock scenario.",
+        "tr": "Şok senaryosu dahil, mevcut ayarlara göre sonuçlar.",
+        "de": "Ergebnisse für die aktuellen Einstellungen, einschließlich des Schock-Szenarios.",
+    },
+    "export_excel": {"en": "Download Excel", "tr": "Excel'i indir", "de": "Excel herunterladen"},
+    "export_pdf": {"en": "Download PDF summary", "tr": "PDF özetini indir", "de": "PDF-Zusammenfassung herunterladen"},
+    "sheet_summary": {"en": "Summary", "tr": "Özet", "de": "Zusammenfassung"},
+    "sheet_curve": {"en": "Profit curve", "tr": "Kâr eğrisi", "de": "Gewinnkurve"},
+    "sheet_monthly": {"en": "Monthly data", "tr": "Aylık veri", "de": "Monatsdaten"},
+    "sheet_models": {"en": "Models", "tr": "Modeller", "de": "Modelle"},
+    "sum_item": {"en": "Item", "tr": "Kalem", "de": "Position"},
+    "sum_value": {"en": "Value", "tr": "Değer", "de": "Wert"},
+    "sum_current_price": {"en": "Current price", "tr": "Mevcut fiyat", "de": "Aktueller Preis"},
+    "sum_profit_current": {
+        "en": "Profit at current price ({per})",
+        "tr": "Mevcut fiyatta kâr ({per})",
+        "de": "Gewinn zum aktuellen Preis ({per})",
+    },
+    "sum_unit_cost": {"en": "Unit cost under scenario", "tr": "Senaryodaki birim maliyet", "de": "Stückkosten im Szenario"},
+    "sum_fixed": {"en": "Fixed costs ({per})", "tr": "Sabit giderler ({per})", "de": "Fixkosten ({per})"},
+    "sum_break_even": {"en": "Break-even price(s)", "tr": "Başabaş fiyat(lar)ı", "de": "Break-even-Preis(e)"},
+    "sum_range": {"en": "90% range of optimal price", "tr": "Optimum fiyatın %90 aralığı", "de": "90%-Bereich des optimalen Preises"},
+    "sum_equation": {"en": "Fitted demand", "tr": "Tahmini talep", "de": "Geschätzte Nachfrage"},
+    "sum_on": {"en": "On", "tr": "Açık", "de": "An"},
+    "sum_off": {"en": "Off", "tr": "Kapalı", "de": "Aus"},
+    "sum_none": {"en": "none", "tr": "yok", "de": "keine"},
+    "col_price": {"en": "Price", "tr": "Fiyat", "de": "Preis"},
+    "col_q_demand": {"en": "Units demanded", "tr": "Talep edilen adet", "de": "Nachgefragte Stück"},
+    "col_q_sold": {"en": "Units sold", "tr": "Satılan adet", "de": "Verkaufte Stück"},
+    "col_cap_binding": {"en": "Capacity binding", "tr": "Kapasite sınırında", "de": "Kapazität ausgeschöpft"},
+    "pdf_notes": {"en": "Warnings and data notes", "tr": "Uyarılar ve veri notları", "de": "Warnungen und Datenhinweise"},
+    "pdf_footer": {
+        "en": "Generated {date} with the Pricing Optimization Engine",
+        "tr": "{date} tarihinde Fiyat Optimizasyon Motoru ile oluşturuldu",
+        "de": "Erstellt am {date} mit der Preisoptimierungs-Engine",
+    },
     # ---------- backend messages (data_ingestion.py, optimizer.py) ----------
+    "warn_season_short": {
+        "en": "Seasonality needs at least {min_n} months of data ({n} available): fitted without it.",
+        "tr": "Mevsimsellik için en az {min_n} aylık veri gerekir ({n} ay mevcut): model mevsimsellik olmadan kuruldu.",
+        "de": "Saisonbereinigung braucht mindestens {min_n} Monate Daten ({n} vorhanden): ohne Saison geschätzt.",
+    },
     "warn_cpi_stale": {
         "en": "CPI data ends {as_of}: later months are not inflation-adjusted.",
         "tr": "TÜFE verisi {as_of} itibarıyla bitiyor: sonraki aylar enflasyona göre düzeltilmedi.",

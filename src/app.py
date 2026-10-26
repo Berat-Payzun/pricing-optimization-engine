@@ -6,6 +6,9 @@ Run with:  streamlit run src/app.py
 from __future__ import annotations
 
 import io
+from dataclasses import asdict
+from datetime import date
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -13,18 +16,21 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from config import COUNTRY_MAP, DEFAULTS, PERIOD_MULT
-from data_ingestion import DataValidationError, aggregate, deflate, load_csv
+from config import BOOTSTRAP_SAMPLES, COUNTRY_MAP, DEFAULTS, PERIOD_MULT, SEASONAL_MIN_MONTHS
+from data_ingestion import PRODUCT, DataValidationError, aggregate, deflate, load_csv
 from macro_api import get_fx, get_inflation
-from optimizer import ScenarioParams, fit_demand, run_scenario
+from optimizer import ScenarioParams, fit_demand, optimal_price_range, run_scenario
+from report import Chart, Series, VLine, build_excel, build_pdf
 from translations import LANGUAGES, localize, translate
 
 SAMPLE_PATH = Path(__file__).resolve().parents[1] / "sample_data.csv"
 
 # Categorical slots from the validated reference palette (fixed order), light / dark steps
 PALETTE = {
-    "light": {"s1": "#2a78d6", "s2": "#eb6834", "s3": "#1baf7a", "muted": "#898781", "band": "rgba(137,135,129,0.12)"},
-    "dark": {"s1": "#3987e5", "s2": "#d95926", "s3": "#199e70", "muted": "#898781", "band": "rgba(195,194,183,0.10)"},
+    "light": {"s1": "#2a78d6", "s2": "#eb6834", "s3": "#1baf7a", "muted": "#898781", "band": "rgba(137,135,129,0.12)",
+              "range": "rgba(42,120,214,0.10)"},
+    "dark": {"s1": "#3987e5", "s2": "#d95926", "s3": "#199e70", "muted": "#898781", "band": "rgba(195,194,183,0.10)",
+             "range": "rgba(57,135,229,0.16)"},
 }
 
 st.set_page_config(page_title="Pricing Optimization Engine", page_icon="📈", layout="wide")
@@ -43,10 +49,13 @@ def cached_fx(country: str):
 
 
 @st.cache_data(show_spinner=False)
-def load_data(raw: bytes, default_cogs: float):
-    df, warnings = load_csv(io.BytesIO(raw), default_cogs)
-    agg, agg_warnings = aggregate(df)
-    return agg, warnings + agg_warnings
+def load_rows(raw: bytes, default_cogs: float):
+    return load_csv(io.BytesIO(raw), default_cogs)
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def cached_range(agg: pd.DataFrame, kind: str, seasonal: bool, params: dict):
+    return optimal_price_range(agg, kind, ScenarioParams(**params), seasonal)
 
 
 # ---------- language ----------
@@ -114,10 +123,11 @@ def macro_badge(v, label: str):
 
 with st.sidebar:
     st.header(t("sidebar_header"))
-    upload = st.file_uploader(t("upload_label"), type="csv", help=t("upload_help"), key="upload")
+    upload = st.file_uploader(t("upload_label"), type=["csv", "xlsx"], help=t("upload_help"), key="upload")
     if upload is None:
         st.caption(t("sample_caption"))
         st.download_button(t("sample_download"), SAMPLE_PATH.read_bytes(), "sample_data.csv", "text/csv")
+    product_slot = st.container()  # filled once the file is read, if it has a product column
 
     country = st.selectbox(t("country_label"), list(COUNTRY_MAP), format_func=lambda c: t(f"country_{c}"), key="country")
     sym = COUNTRY_MAP[country]["symbol"]
@@ -128,6 +138,8 @@ with st.sidebar:
     per = t(f"per_{timeframe}")
     default_cogs = st.number_input(t("cogs_label", sym=sym), min_value=0.0, value=DEFAULTS["cogs"],
                                    help=t("cogs_help"), key="default_cogs")
+    cost_override = st.number_input(t("cost_override_label", sym=sym), min_value=0.0, value=0.0,
+                                    help=t("cost_override_help"), key="cost_override")
     fixed_monthly = st.number_input(t("fixed_label", sym=sym), min_value=0.0, value=DEFAULTS["fixed_costs"], step=500.0,
                                     help=t("fixed_help"), key="fixed_monthly")
     capacity = st.number_input(t("capacity_label", per=per), min_value=0,
@@ -144,8 +156,16 @@ st.title(t("app_title"))
 st.caption(t("app_caption", country=t(f"country_{country}"), currency=COUNTRY_MAP[country]["currency"]))
 
 raw = upload.getvalue() if upload is not None else SAMPLE_PATH.read_bytes()
+product = None
 try:
-    agg, data_warnings = load_data(raw, default_cogs)
+    rows, data_warnings = load_rows(raw, default_cogs)
+    if PRODUCT in rows:
+        with product_slot:
+            product = st.selectbox(t("product_label"), sorted(rows[PRODUCT].unique()), help=t("product_help"),
+                                   key="product")
+        rows = rows[rows[PRODUCT] == product].drop(columns=PRODUCT)
+    agg, agg_warnings = aggregate(rows)
+    data_warnings = data_warnings + agg_warnings
 except (DataValidationError, ValueError) as e:
     st.error(t("err_file", error=error_text(e)))
     st.stop()
@@ -158,10 +178,14 @@ agg, deflate_warnings = deflate(agg, infl.series if use_real else None)
 if not use_real:
     deflate_warnings = []
 
+with st.sidebar:
+    seasonal = st.toggle(t("season_label"), value=len(agg) >= SEASONAL_MIN_MONTHS,
+                         help=t("season_help", min_n=SEASONAL_MIN_MONTHS), key="use_season")
+
 models = {}
 for kind in ("linear", "loglog"):
     try:
-        models[kind] = fit_demand(agg, kind)
+        models[kind] = fit_demand(agg, kind, seasonal)
     except ValueError as e:
         models[kind] = e
 model = models[model_kind]
@@ -170,13 +194,13 @@ if isinstance(model, Exception):
     st.stop()
 
 current_price = float(agg["Price_Charged"].iloc[-1])
-base_cogs = float(agg["Cost_Per_Unit"].iloc[-1])
+base_cogs = cost_override if cost_override > 0 else float(agg["Cost_Per_Unit"].iloc[-1])
 base_comp = float(agg["Real_Competitor_Price"].iloc[-1]) if model.has_comp else None
 
 with st.sidebar:
     max_price = st.number_input(t("max_price_label", sym=sym), min_value=0.01,
-                                value=float(round(2 * model.p_max, 2)), key=f"max_price_{model_kind}_{len(agg)}",
-                                help=t("max_price_help"))
+                                value=float(round(2 * model.p_max, 2)),
+                                key=f"max_price_{model_kind}_{product}_{len(agg)}", help=t("max_price_help"))
 
 # Live macro values become the slider defaults, refreshed whenever the country changes
 if st.session_state.get("shock_country") != country:
@@ -215,10 +239,15 @@ usd_inflation = inflation / 100 if is_usd else us_infl.value / 100
 
 common = dict(base_cogs=base_cogs, fixed_monthly=fixed_monthly, capacity=capacity or np.inf, period=timeframe,
               import_share=import_share / 100, base_comp_price=base_comp, current_price=current_price, max_price=max_price)
-result = run_scenario(model, ScenarioParams(**common, inflation=inflation / 100, usd_inflation=usd_inflation,
-                                            fx_shift=(0 if is_usd else fx_shift) / 100, comp_shift=comp_shift / 100,
-                                            price_passthrough=passthrough))
+scenario = ScenarioParams(**common, inflation=inflation / 100, usd_inflation=usd_inflation,
+                          fx_shift=(0 if is_usd else fx_shift) / 100, comp_shift=comp_shift / 100,
+                          price_passthrough=passthrough)
+result = run_scenario(model, scenario)
 today = run_scenario(model, ScenarioParams(**common))
+try:
+    price_range = cached_range(agg, model_kind, seasonal, asdict(scenario))
+except ValueError:
+    price_range = None
 
 opt, base = result.optimal, result.baseline
 
@@ -226,8 +255,12 @@ opt, base = result.optimal, result.baseline
 
 with metrics_area:
     c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric(t("metric_opt_price"), money(opt["price"], sym), t("metric_opt_delta", pct=(opt["price"] / current_price - 1) * 100),
-              help=t("metric_opt_help", price=money(current_price, sym)))
+    with c1:
+        st.metric(t("metric_opt_price"), money(opt["price"], sym), t("metric_opt_delta", pct=(opt["price"] / current_price - 1) * 100),
+                  help=t("metric_opt_help", price=money(current_price, sym)))
+        if price_range:
+            st.caption(t("metric_opt_range", low=money(price_range[0], sym), high=money(price_range[1], sym)),
+                       help=t("metric_opt_range_help", n=BOOTSTRAP_SAMPLES))
     c2.metric(t("metric_profit", per=per), money(opt["profit"], sym), money(opt["profit"] - base["profit"], sym),
               help=t("metric_profit_help", profit=money(base["profit"], sym)))
     c3.metric(t("metric_ped"), f"{result.ped_opt:.2f}", help=t("metric_ped_help"))
@@ -260,6 +293,9 @@ with charts_area:
     if not cap.empty:
         fig.add_vrect(x0=cap["price"].min(), x1=cap["price"].max(), fillcolor=col["band"], line_width=0,
                       annotation_text=t("chart_capacity"), annotation_position="top left")
+    if price_range:
+        fig.add_vrect(x0=price_range[0], x1=price_range[1], fillcolor=col["range"], line_width=0,
+                      annotation_text=t("chart_range"), annotation_position="bottom left")
     fig.add_trace(go.Scatter(x=curve["price"], y=curve["profit"], name=t("chart_net_profit"), line=dict(color=col["s1"], width=2.5)))
     fig.add_trace(go.Scatter(x=curve["price"], y=curve["revenue"], name=t("chart_revenue"), line=dict(color=col["s2"], width=2)))
     fig.add_trace(go.Scatter(x=curve["price"], y=curve["total_cost"], name=t("chart_total_cost"), line=dict(color=col["s3"], width=2)))
@@ -327,11 +363,12 @@ with st.expander(t("details_expander")):
         st.markdown(f"**{t('details_fitted')}**")
         st.code(model.equation(), language=None)
         columns = [t("col_model"), t("col_r2"), t("col_periods"), t("col_coef")]
-        rows = []
+        model_rows = []
         for kind, m in models.items():
             fit = (None, None, None) if isinstance(m, Exception) else (round(m.r2, 3), m.n, round(m.b, 3))
-            rows.append(dict(zip(columns, (t(f"model_{kind}"), *fit))))
-        st.dataframe(pd.DataFrame(rows), hide_index=True)
+            model_rows.append(dict(zip(columns, (t(f"model_{kind}"), *fit))))
+        model_table = pd.DataFrame(model_rows)
+        st.dataframe(model_table, hide_index=True)
         xed = result.xed_opt
         xed_line = t("details_xed", value=f"{xed:.2f}") if xed is not None else t("details_xed_na")
         st.markdown(f"- {t('details_ped_current', value=f'{result.ped_current:.2f}')}\n- {xed_line}")
@@ -347,3 +384,74 @@ with st.expander(t("details_expander")):
         st.markdown(f"- {t('details_months', n=len(agg), start=month_year(agg.index.min()), end=month_year(agg.index.max()))}")
     st.markdown(f"**{t('details_agg')}**")
     st.dataframe(agg.round(2), width="stretch")
+
+# ---------- export ----------
+
+def on_off(flag: bool) -> str:
+    return t("sum_on") if flag else t("sum_off")
+
+
+summary = ([(t("product_label"), product)] if product else []) + [
+    (t("country_label"), f"{t(f'country_{country}')} ({COUNTRY_MAP[country]['currency']})"),
+    (t("timeframe_label"), t(f"timeframe_{timeframe}")),
+    (t("model_label"), t(f"model_{model_kind}")),
+    (t("season_label"), on_off(model.season is not None)),
+    (t("real_label"), on_off(use_real)),
+    (t("shock_infl"), f"{inflation:.1f}%"),
+    (t("shock_fx"), "—" if is_usd else f"{fx_shift:+.1f}%"),
+    (t("shock_comp"), f"{comp_shift:+.0f}%" if model.has_comp else "—"),
+    (t("shock_passthrough"), on_off(passthrough)),
+    (t("sum_current_price"), money(current_price, sym)),
+    (t("metric_opt_price"), f"{money(opt['price'], sym)} · {t('metric_opt_delta', pct=(opt['price'] / current_price - 1) * 100)}"),
+    (t("sum_range"), f"{money(price_range[0], sym)} – {money(price_range[1], sym)}" if price_range else "—"),
+    (t("metric_profit", per=per), money(opt["profit"], sym)),
+    (t("sum_profit_current", per=per), money(base["profit"], sym)),
+    (t("metric_ped"), f"{result.ped_opt:.2f}"),
+    (t("metric_r2"), f"{model.r2:.2f}"),
+    (t("sum_unit_cost"), money(result.cogs_final, sym)),
+    (t("sum_fixed", per=per), money(result.fixed_final, sym)),
+    (t("sum_break_even"), ", ".join(money(b, sym) for b in result.break_evens) or t("sum_none")),
+    (t("sum_equation"), model.equation()),
+    (t("metric_cpi"), f"{infl.value:.1f}% ({infl.source}, {infl.as_of or '—'})"),
+    (t("metric_fx", currency=COUNTRY_MAP[country]["currency"]), f"{fx.value:,.4f} ({fx.source})"),
+]
+curve_table = curve[["price", "q_demand", "q_sold", "revenue", "total_cost", "profit", "cap_binding"]].rename(columns={
+    "price": t("col_price"), "q_demand": t("col_q_demand"), "q_sold": t("col_q_sold"), "revenue": t("chart_revenue"),
+    "total_cost": t("chart_total_cost"), "profit": t("chart_net_profit"), "cap_binding": t("col_cap_binding"),
+}).round(4)
+sheets = {
+    t("sheet_summary"): pd.DataFrame(summary, columns=[t("sum_item"), t("sum_value")]),
+    t("sheet_curve"): curve_table,
+    t("sheet_monthly"): agg.round(4).reset_index(),
+    t("sheet_models"): model_table,
+}
+notes = list(dict.fromkeys(localize(w, lang) for w in
+                           model.warnings + result.warnings + data_warnings + deflate_warnings))
+chart = Chart(
+    title=t("chart_main_title", per=per),
+    x=curve["price"].to_numpy(),
+    series=[Series(t("chart_net_profit"), curve["profit"].to_numpy(), PALETTE["light"]["s1"], 0.8),
+            Series(t("chart_revenue"), curve["revenue"].to_numpy(), PALETTE["light"]["s2"]),
+            Series(t("chart_total_cost"), curve["total_cost"].to_numpy(), PALETTE["light"]["s3"])],
+    xlabel=t("axis_price", sym=sym),
+    vlines=[VLine(opt["price"], t("chart_optimal", price=money(opt["price"], sym)), PALETTE["light"]["s1"]),
+            VLine(current_price, t("chart_current", price=money(current_price, sym)), PALETTE["light"]["muted"], dashed=True)],
+    band=(price_range[0], price_range[1], t("chart_range")) if price_range else None,
+)
+title = t("app_title") + (f" · {product}" if product else "")
+subtitle = t("app_caption", country=t(f"country_{country}"), currency=COUNTRY_MAP[country]["currency"])
+stem = "pricing_" + "".join(ch if ch.isalnum() else "_" for ch in str(product or "results")) + f"_{date.today():%Y-%m-%d}"
+
+st.divider()
+st.subheader(t("export_header"))
+st.caption(t("export_caption"))
+e1, e2, _ = st.columns([1, 1, 2])
+# The files are built only when a button is clicked (callable data, run on another thread),
+# so sliders stay fast. partial() binds this run's values, not whatever a later rerun holds.
+e1.download_button(t("export_excel"), data=partial(build_excel, sheets), file_name=f"{stem}.xlsx",
+                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                   on_click="ignore", width="stretch", icon=":material/table_view:")
+e2.download_button(t("export_pdf"), data=partial(build_pdf, title, subtitle, summary, chart, t("pdf_notes"), notes,
+                                                 t("pdf_footer", date=f"{date.today():%Y-%m-%d}")),
+                   file_name=f"{stem}.pdf", mime="application/pdf",
+                   on_click="ignore", width="stretch", icon=":material/picture_as_pdf:")

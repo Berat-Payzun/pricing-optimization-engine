@@ -123,3 +123,40 @@ def test_comma_csv_keeps_iso_dates_and_utf8_bom():
     df, _ = load_csv(io.BytesIO(raw), default_cogs=1)
     assert df["Date"].iloc[0] == pd.Timestamp("2024-03-04")
     assert df["Price_Charged"].iloc[0] == pytest.approx(10.5)
+
+
+@pytest.mark.parametrize("header, target", [
+    ("Tarih", "Date"), ("Satış Fiyatı", "Price_Charged"), ("ADET", "Quantity_Sold"), ("Birim Maliyet", "Cost_Per_Unit"),
+    ("Rakip Fiyatı", "Competitor_Price"), ("Ürün", "Product"), ("Datum", "Date"), ("Preis", "Price_Charged"),
+    ("Menge", "Quantity_Sold"), ("Stückkosten", "Cost_Per_Unit"), ("Konkurrenzpreis", "Competitor_Price"),
+    ("Produkt", "Product"), ("SKU", "Product"), ("Price-Charged", "Price_Charged"),
+])
+def test_turkish_german_and_english_headers(header, target):
+    from data_ingestion import ALIAS_LOOKUP, fold_header
+
+    assert ALIAS_LOOKUP[fold_header(header)] == target
+
+
+def test_first_matching_header_wins():
+    df, _ = load_csv(csv("Date,Price,Price_Charged,Quantity\n2024-01-01,10,99,5"), default_cogs=1)
+    assert df["Price_Charged"].iloc[0] == 10
+
+
+def test_excel_upload_with_turkish_headers_and_products():
+    data = pd.DataFrame({
+        "Tarih": pd.to_datetime(["2024-01-01", "2024-01-01", "2024-02-01", "2024-02-01"]),
+        "Ürün": ["Kahve", "Çay", "Kahve", None],
+        "Fiyat": [10.5, 20.0, 11.0, 21.0],
+        "Adet": [5, 3, 4, 2],
+        "Rakip Fiyatı": [None, 19.0, 10.0, None],
+    })
+    buf = io.BytesIO()
+    data.to_excel(buf, index=False)
+    df, _ = load_csv(io.BytesIO(buf.getvalue()), default_cogs=2)
+    assert set(df.columns) >= {"Date", "Product", "Price_Charged", "Quantity_Sold", "Competitor_Price"}
+    assert sorted(df["Product"].unique()) == ["Kahve", "Çay", "—"]  # missing product gets a placeholder
+    kahve = df[df["Product"] == "Kahve"]
+    assert kahve["Price_Charged"].tolist() == pytest.approx([10.5, 11.0])
+    # Competitor gaps are filled within the product, not from another product
+    assert kahve["Competitor_Price"].tolist() == pytest.approx([10.0, 10.0])
+    assert df.loc[df["Product"] == "Çay", "Competitor_Price"].tolist() == pytest.approx([19.0])

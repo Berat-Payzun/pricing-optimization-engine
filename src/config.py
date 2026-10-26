@@ -135,6 +135,12 @@ MIN_PERIODS_FIT = 3
 # A CPI series ending more than this many months before the last sales month is flagged.
 CPI_STALE_MONTHS = 3
 
+# Month-of-year effects need two full years, or season and price can't be told apart.
+SEASONAL_MIN_MONTHS = 24
+
+# Resamples for the bootstrap range of the optimal price.
+BOOTSTRAP_SAMPLES = 200
+
 DEFAULTS = {
     "cogs": 10.0,
     "fixed_costs": 5000.0,
