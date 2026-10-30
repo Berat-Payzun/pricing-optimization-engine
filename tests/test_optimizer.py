@@ -224,3 +224,125 @@ def test_bootstrap_matches_full_refit_path():
             pass
     fast = optimal_price_range(agg, "linear", p, seasonal=True, n=60, seed=7)
     assert fast == pytest.approx(tuple(np.percentile(slow, [5, 95])), rel=1e-6)
+
+
+# ---------- fees, VAT and extra unit costs ----------
+
+def analytic_optimum(m, cogs, k=1.0):
+    """Linear demand with per-unit net price k·P − cogs: P* = (a/(−b) + cogs/k) / 2."""
+    a_eff = m.intercept + m.c * 50.0
+    return (a_eff / -m.b + cogs / k) / 2
+
+
+@pytest.mark.parametrize("fees", [dict(commission=0.2), dict(vat=0.2), dict(vat=0.2, commission=0.15, payment_fee=0.02)])
+def test_fees_and_vat_match_analytic_optimum(fees):
+    m = fit_demand(synthetic_agg(), "linear")
+    p = params(m, **fees)
+    r = run_scenario(m, p)
+    k = 1 / (1 + p.vat) - p.fee_rate
+    step = r.curve["price"].iloc[1] - r.curve["price"].iloc[0]
+    assert r.optimal["price"] == pytest.approx(analytic_optimum(m, 20.0, k), abs=step)
+    assert r.optimal["price"] > run_scenario(m, params(m)).optimal["price"]
+
+
+def test_vat_and_fees_come_off_profit():
+    m = fit_demand(synthetic_agg(), "linear")
+    plain = run_scenario(m, params(m)).baseline
+    taxed = run_scenario(m, params(m, vat=0.2, commission=0.1)).baseline
+    assert taxed["revenue"] == pytest.approx(plain["revenue"] / 1.2)
+    assert taxed["fees"] == pytest.approx(0.1 * 45.0 * plain["q_sold"])
+    assert taxed["profit"] == pytest.approx(plain["profit"] - taxed["vat"] - taxed["fees"])
+    assert taxed["margin_pct"] == pytest.approx((45 / 1.2 - 4.5 - 20) / (45 / 1.2))
+
+
+def test_extra_unit_cost_inflates_with_local_inflation():
+    p = ScenarioParams(base_cogs=10.0, fixed_monthly=0, capacity=1e9, import_share=0.0, inflation=0.1,
+                       extra_unit_cost=2.0)
+    assert shocked_costs(p)[0] == pytest.approx(10 * 1.1 + 2 * 1.1)
+    m = fit_demand(synthetic_agg(), "linear")
+    assert run_scenario(m, params(m, extra_unit_cost=5)).optimal["price"] > run_scenario(m, params(m)).optimal["price"]
+
+
+def test_bootstrap_range_brackets_optimum_with_fees():
+    from optimizer import optimal_price_range
+
+    agg = synthetic_agg(noise=0.05)
+    m = fit_demand(agg, "linear")
+    p = params(m, commission=0.2, vat=0.2)
+    low, high = optimal_price_range(agg, "linear", p, seed=3)
+    assert low < run_scenario(m, p).optimal["price"] < high
+
+
+# ---------- guardrails ----------
+
+def guarded(rails, **kw):
+    from optimizer import recommend
+
+    m = fit_demand(synthetic_agg(), "linear")
+    p = params(m, **kw)
+    r = run_scenario(m, p)
+    return r, recommend(m, p, r, rails)
+
+
+def test_guardrails_off_return_the_optimum():
+    from optimizer import Guardrails
+
+    r, rec = guarded(Guardrails(max_change=0))
+    assert rec.price == r.optimal["price"] and rec.binding == [] and rec.warnings == []
+
+
+def test_max_change_clamps_the_step():
+    from optimizer import Guardrails
+
+    r, rec = guarded(Guardrails(max_change=0.05), current_price=30.0)  # optimum ≈ 42, far above +5%
+    step = r.curve["price"].iloc[1] - r.curve["price"].iloc[0]
+    assert rec.price == pytest.approx(31.5, abs=step)
+    assert rec.price <= 31.5
+    assert rec.binding == ["max_change"]
+    assert rec.row["profit"] < r.optimal["profit"]
+
+
+def test_floor_and_ceiling():
+    from optimizer import Guardrails
+
+    _, high = guarded(Guardrails(max_change=0, floor=50.0))
+    assert high.price == 50.0 and high.binding == ["floor"]  # exactly the floor, not the next grid point
+    _, low = guarded(Guardrails(max_change=0, ceiling=35.0))
+    assert low.price == 35.0 and low.binding == ["ceiling"]
+
+
+def test_min_margin_is_respected():
+    from optimizer import Guardrails
+
+    r, rec = guarded(Guardrails(max_change=0, min_margin=0.6))
+    assert r.optimal["margin_pct"] < 0.6
+    assert rec.row["margin_pct"] >= 0.6 - 1e-9
+    assert "min_margin" in rec.binding
+
+
+def test_unreachable_margin_falls_back_to_band_with_warning():
+    from optimizer import Guardrails
+
+    _, rec = guarded(Guardrails(max_change=0.05, min_margin=0.9))
+    assert 45 * 0.95 - 1e-9 <= rec.price <= 45 * 1.05 + 1e-9
+    assert [w.key for w in rec.warnings] == ["warn_guardrail_margin"]
+    assert "min_margin" not in rec.binding  # dropped, so it isn't what limits the price
+
+
+def test_floor_outside_step_band_warns():
+    from optimizer import Guardrails
+
+    _, rec = guarded(Guardrails(max_change=0.05, floor=60.0))
+    assert rec.price >= 60.0
+    assert [w.key for w in rec.warnings] == ["warn_guardrail_conflict"]
+
+
+@pytest.mark.parametrize("ending,cents", [(".99", 99), (".90", 90), ("whole", 0)])
+def test_price_endings(ending, cents):
+    from optimizer import Guardrails
+
+    r, rec = guarded(Guardrails(max_change=0, ending=ending))
+    assert round(rec.price * 100) % 100 == cents
+    assert abs(rec.price - r.optimal["price"]) < 1.0
+    assert rec.row["profit"] == pytest.approx(
+        run_scenario(fit_demand(synthetic_agg(), "linear"), params(None, current_price=rec.price)).baseline["profit"])

@@ -107,8 +107,11 @@ def to_dates(values: pd.Series) -> pd.Series:
     return pd.to_datetime(s, errors="coerce", dayfirst=dayfirst)
 
 
-def load_csv(source, default_cogs: float) -> tuple[pd.DataFrame, list[str]]:
-    """Read and clean raw sales rows from a CSV or .xlsx file. Returns (clean_df, warnings)."""
+def load_csv(source, default_cogs: float, drop_duplicates: bool = True) -> tuple[pd.DataFrame, list[str]]:
+    """Read and clean raw sales rows from a CSV or .xlsx file. Returns (clean_df, warnings).
+
+    Exact duplicate rows usually come from combining overlapping exports and would double
+    the sales; `drop_duplicates=False` keeps them for transaction logs where they can be real."""
     warnings: list[str] = []
     raw, decimal_comma = read_table(source)
     df = normalize_columns(raw)
@@ -132,6 +135,13 @@ def load_csv(source, default_cogs: float) -> tuple[pd.DataFrame, list[str]]:
         warnings.append(Msg("warn_rows_dropped", dropped=dropped, n_raw=n_raw))
     if df.empty:
         raise DataValidationError(Msg("err_no_valid_rows"))
+
+    n_dup = int(df.duplicated().sum())
+    if n_dup and drop_duplicates:
+        df = df.drop_duplicates()
+        warnings.append(Msg("warn_duplicates_dropped", n=n_dup))
+    elif n_dup:
+        warnings.append(Msg("warn_duplicates_kept", n=n_dup))
 
     df = df.sort_values("Date").reset_index(drop=True)
 

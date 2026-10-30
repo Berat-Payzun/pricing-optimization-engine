@@ -9,7 +9,10 @@ Pipeline (Steps refer to the architecture guide):
   6. FX + USD inflation on the imported COGS share  (shocked_costs)
   7. Local inflation on the rest of COGS and fixed  (shocked_costs)
   8. Profit sweep over a 2,000-point price grid     (run_scenario); with price pass-through,
-     demand is evaluated at the real price P / (1 + inflation)
+     demand is evaluated at the real price P / (1 + inflation). VAT inside the price and
+     price-based fees (commission, payment) come off each unit's revenue.
+  9. Guardrails on the recommendation               (recommend): max step, min margin,
+     floor/ceiling and price endings
 """
 
 from __future__ import annotations
@@ -193,6 +196,16 @@ class ScenarioParams:
     # True: general inflation also lifts willingness to pay and the competitor's price, so
     # demand is evaluated at real prices (price / (1 + inflation)). False: only costs rise.
     price_passthrough: bool = False
+    # Sales channel economics. Fees are charged on the customer-facing (VAT-inclusive) price;
+    # vat is the rate contained in the price (0 when prices are net of VAT).
+    commission: float = 0.0  # fraction of price, e.g. marketplace commission
+    payment_fee: float = 0.0  # fraction of price
+    vat: float = 0.0  # fraction
+    extra_unit_cost: float = 0.0  # shipping, packaging etc. per unit, sourced locally
+
+    @property
+    def fee_rate(self) -> float:
+        return self.commission + self.payment_fee
 
 
 @dataclass
@@ -212,29 +225,38 @@ class ScenarioResult:
 
 def shocked_costs(p: ScenarioParams) -> tuple[float, float]:
     """Steps 6-7: the imported (USD-priced) share of COGS moves with FX and USD inflation,
-    the local share and fixed costs with local inflation."""
+    the local share, extra unit costs and fixed costs with local inflation."""
     imported = p.import_share * (1 + p.fx_shift) * (1 + p.usd_inflation)
     local = (1 - p.import_share) * (1 + p.inflation)
-    cogs_final = p.base_cogs * (imported + local)
+    cogs_final = p.base_cogs * (imported + local) + p.extra_unit_cost * (1 + p.inflation)
     fixed_final = p.fixed_monthly * (1 + p.inflation) * PERIOD_MULT[p.period]
     return cogs_final, fixed_final
 
 
-def _economics(model, price, comp_price, cogs, fixed, capacity, mult, level=1.0) -> dict:
-    """`price` is nominal; demand responds to the real price `price / level`."""
+def _economics(model, price, comp_price, cogs, fixed, capacity, mult, level=1.0, vat=0.0, fee_rate=0.0) -> dict:
+    """`price` is nominal and customer-facing; demand responds to the real price `price / level`.
+    Revenue is net of the VAT contained in the price; fees are a share of the price."""
+    price = np.asarray(price, dtype=float)
     q_demand = model.predict(price / level, comp_price) * mult
     q_sold = np.minimum(q_demand, capacity)
-    revenue = price * q_sold
+    net_price = price / (1 + vat)
+    unit_fees = fee_rate * price
+    revenue = net_price * q_sold
     var_cost = cogs * q_sold
-    total_cost = var_cost + fixed
+    fees = unit_fees * q_sold
+    total_cost = var_cost + fees + fixed
     return {
         "price": price,
         "q_demand": q_demand,
         "q_sold": q_sold,
         "revenue": revenue,
+        "vat": (price - net_price) * q_sold,
+        "fees": fees,
         "var_cost": var_cost,
         "total_cost": total_cost,
         "profit": revenue - total_cost,
+        # Net operating margin per unit, as a share of the net-of-VAT price
+        "margin_pct": (net_price - unit_fees - cogs) / net_price,
         "cap_binding": q_demand > capacity,
     }
 
@@ -269,14 +291,16 @@ def run_scenario(model: DemandModel, p: ScenarioParams) -> ScenarioResult:
     level, comp_real, cogs_final, fixed_final, grid = s.level, s.comp_real, s.cogs_final, s.fixed_final, s.grid
     comp_price = comp_real * level if model.has_comp else None
 
-    curve = pd.DataFrame(_economics(model, grid, comp_real, cogs_final, fixed_final, p.capacity, mult, level))
+    curve = pd.DataFrame(_economics(model, grid, comp_real, cogs_final, fixed_final, p.capacity, mult, level,
+                                    p.vat, p.fee_rate))
     i = int(curve["profit"].idxmax())
     optimal = curve.iloc[i].to_dict()
     # Baseline keeps today's nominal price, which is a real price cut under pass-through
     baseline = {
         k: float(v)
         for k, v in _economics(
-            model, np.array(p.current_price), comp_real, cogs_final, fixed_final, p.capacity, mult, level
+            model, np.array(p.current_price), comp_real, cogs_final, fixed_final, p.capacity, mult, level,
+            p.vat, p.fee_rate
         ).items()
     }
 
@@ -316,6 +340,108 @@ def run_scenario(model: DemandModel, p: ScenarioParams) -> ScenarioResult:
     )
 
 
+ENDINGS = ("none", ".99", ".90", "whole")
+
+
+@dataclass
+class Guardrails:
+    """Business rules on the recommended price. 0 switches a rule off."""
+    max_change: float = 0.15  # max step from the current price, as a fraction
+    min_margin: float = 0.0  # min net operating margin per unit (share of the net-of-VAT price)
+    floor: float = 0.0
+    ceiling: float = 0.0
+    ending: str = "none"  # one of ENDINGS
+
+
+@dataclass
+class Recommendation:
+    price: float
+    row: dict  # economics at `price`, same keys as the curve
+    binding: list[str]  # rules the unconstrained optimum broke: "max_change", "min_margin", "floor", "ceiling"
+    warnings: list[str]
+
+
+def _bounds(rails: Guardrails, current_price: float) -> tuple[float, float]:
+    """Hard price band from max step, floor and ceiling."""
+    low, high = 0.0, np.inf
+    if rails.max_change > 0:
+        low, high = current_price * (1 - rails.max_change), current_price * (1 + rails.max_change)
+    if rails.floor > 0:
+        low = max(low, rails.floor)
+    if rails.ceiling > 0:
+        high = min(high, rails.ceiling)
+    return low, high
+
+
+def _with_ending(price: float, ending: str) -> list[float]:
+    """The nearest price points below and above `price` with the given ending."""
+    if ending == "whole":
+        return [float(np.floor(price)), float(np.ceil(price))]
+    cents = {".99": 0.99, ".90": 0.90}[ending]
+    base = np.floor(price)
+    return [float(base - 1 + cents), float(base + cents)]
+
+
+def recommend(model: DemandModel, p: ScenarioParams, result: ScenarioResult, rails: Guardrails) -> Recommendation:
+    """Step 9: the most profitable price on the scenario's curve that satisfies the guardrails,
+    rounded to the chosen price ending."""
+    curve, warnings = result.curve, []
+    low, high = _bounds(rails, p.current_price)
+    if low > high:  # floor above ceiling, or outside the max-step band
+        warnings.append(Msg("warn_guardrail_conflict"))
+        low, high = _bounds(Guardrails(max_change=0.0, floor=rails.floor, ceiling=rails.ceiling), p.current_price)
+        if low > high:
+            low, high = 0.0, np.inf
+
+    min_margin = rails.min_margin
+
+    def margin_ok(m):
+        return np.asarray(m) >= min_margin - 1e-12 if min_margin > 0 else np.ones_like(m, dtype=bool)
+
+    opt = result.optimal
+    binding = [name for name, broken in (
+        ("max_change", rails.max_change > 0 and abs(opt["price"] / p.current_price - 1) > rails.max_change + 1e-9),
+        ("min_margin", not margin_ok(opt["margin_pct"])),
+        ("floor", rails.floor > 0 and opt["price"] < rails.floor),
+        ("ceiling", rails.ceiling > 0 and opt["price"] > rails.ceiling),
+    ) if broken]
+
+    s = _setup(model.has_comp, p)
+    mult = PERIOD_MULT[p.period]
+
+    def evaluate(prices):
+        econ = _economics(model, np.asarray(prices, dtype=float), s.comp_real, s.cogs_final, s.fixed_final,
+                          p.capacity, mult, s.level, p.vat, p.fee_rate)
+        return [{k: (v[i].item() if isinstance(v, np.ndarray) else v) for k, v in econ.items()}
+                for i in range(len(prices))]
+
+    def best_in_band() -> dict | None:
+        """Best grid point inside the band, or an exact band edge (the grid rarely hits a floor exactly)."""
+        feasible = (curve["price"] >= low) & (curve["price"] <= high) & margin_ok(curve["margin_pct"])
+        rows = [curve[feasible].loc[curve.loc[feasible, "profit"].idxmax()].to_dict()] if feasible.any() else []
+        edges = [e for e in (low, high) if 0 < e < np.inf]
+        rows += [r for r in evaluate(edges) if margin_ok(r["margin_pct"])]
+        return max(rows, key=lambda r: r["profit"]) if rows else None
+
+    row = best_in_band()
+    if row is None and min_margin > 0:
+        warnings.append(Msg("warn_guardrail_margin", margin=min_margin * 100))
+        min_margin = 0.0  # unreachable inside the price band: keep the band, drop the margin rule
+        binding = [b for b in binding if b != "min_margin"]
+        row = best_in_band()
+    if row is None:  # defensive: the band always has a grid point or a finite edge
+        row = evaluate([opt["price"]])[0]
+    if rails.ending != "none":
+        candidates = [c for c in evaluate([c for c in _with_ending(row["price"], rails.ending) if c > 0])
+                      if low - 1e-9 <= c["price"] <= high + 1e-9 and margin_ok(c["margin_pct"])]
+        if candidates:
+            row = max(candidates, key=lambda c: c["profit"])
+        else:
+            warnings.append(Msg("warn_guardrail_ending"))
+    row = {k: (v.item() if isinstance(v, np.generic) else v) for k, v in row.items()}
+    return Recommendation(price=float(row["price"]), row=row, binding=binding, warnings=warnings)
+
+
 def optimal_price_range(agg: pd.DataFrame, kind: str, params: ScenarioParams, seasonal: bool = False,
                         n: int = BOOTSTRAP_SAMPLES, coverage: float = 0.9, seed: int = 0) -> tuple[float, float] | None:
     """Bootstrap range of P*: refit demand on months resampled with replacement and re-run
@@ -337,7 +463,7 @@ def optimal_price_range(agg: pd.DataFrame, kind: str, params: ScenarioParams, se
         coef = np.linalg.lstsq(X - x_mean, y - y_mean, rcond=None)[0]
         model = _model(d, kind, y_mean - x_mean @ coef, coef, [])
         profit = _economics(model, s.grid, s.comp_real, s.cogs_final, s.fixed_final, params.capacity, mult,
-                            s.level)["profit"]
+                            s.level, params.vat, params.fee_rate)["profit"]
         prices.append(s.grid[int(np.argmax(profit))])
     if len(prices) < n / 2:
         return None

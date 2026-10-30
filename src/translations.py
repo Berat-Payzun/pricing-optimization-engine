@@ -179,12 +179,15 @@ STRINGS: dict[str, dict[str, str]] = {
     # ---------- shock simulation ----------
     "shock_header": {"en": "Macro shock simulation", "tr": "Makro şok simülasyonu", "de": "Makroschock-Simulation"},
     "shock_caption": {
-        "en": "Defaults come from live data: 12-month CPI inflation and the 12-month change in the "
-              "local-currency/USD rate. Move them to test what-if scenarios.",
-        "tr": "Varsayılan değerler canlı veriden gelir: 12 aylık TÜFE enflasyonu ve yerel para/USD kurundaki "
-              "12 aylık değişim. Farklı senaryoları denemek için kaydırın.",
-        "de": "Die Standardwerte stammen aus Live-Daten: 12-Monats-Inflation (VPI) und die 12-Monats-Veränderung "
-              "des Kurses Landeswährung/USD. Verschieben Sie sie, um Was-wäre-wenn-Szenarien zu testen.",
+        "en": "What if the next 12 months look like the last 12? Defaults come from live data: 12-month CPI "
+              "inflation and the 12-month change in the local-currency/USD rate. The recommendation above is "
+              "for today and does not move with these sliders.",
+        "tr": "Önümüzdeki 12 ay son 12 ay gibi geçerse ne olur? Varsayılan değerler canlı veriden gelir: 12 aylık "
+              "TÜFE enflasyonu ve yerel para/USD kurundaki 12 aylık değişim. Yukarıdaki öneri bugün içindir ve bu "
+              "kaydırıcılarla değişmez.",
+        "de": "Was, wenn die nächsten 12 Monate wie die letzten 12 verlaufen? Die Standardwerte stammen aus Live-Daten: "
+              "12-Monats-Inflation (VPI) und die 12-Monats-Veränderung des Kurses Landeswährung/USD. Die Empfehlung "
+              "oben gilt für heute und ändert sich mit diesen Reglern nicht.",
     },
     "shock_infl": {"en": "Country inflation rate (%)", "tr": "Ülke enflasyon oranı (%)", "de": "Inflationsrate des Landes (%)"},
     "shock_infl_help": {
@@ -238,13 +241,14 @@ STRINGS: dict[str, dict[str, str]] = {
     # Deltas start with the signed number: st.metric colours the arrow from the leading sign.
     "metric_opt_delta": {"en": "{pct:+.1f}% vs current", "tr": "{pct:+.1f}% (mevcut fiyata göre)", "de": "{pct:+.1f}% ggü. aktuell"},
     "metric_opt_help": {"en": "Current price: {price}", "tr": "Mevcut fiyat: {price}", "de": "Aktueller Preis: {price}"},
-    "metric_profit": {"en": "Peak net profit ({per})", "tr": "En yüksek net kâr ({per})", "de": "Maximaler Nettogewinn ({per})"},
+    "metric_profit": {"en": "Net profit ({per})", "tr": "Net kâr ({per})", "de": "Nettogewinn ({per})"},
     "metric_profit_help": {
-        "en": "Delta vs keeping the current price under the same scenario ({profit}).",
-        "tr": "Aynı senaryoda mevcut fiyatı korumaya göre fark ({profit}).",
-        "de": "Differenz zur Beibehaltung des aktuellen Preises im selben Szenario ({profit}).",
+        "en": "Profit at the recommended price. Delta vs keeping the current price ({profit}).",
+        "tr": "Önerilen fiyattaki kâr. Mevcut fiyatı korumaya göre fark ({profit}).",
+        "de": "Gewinn zum empfohlenen Preis. Differenz zur Beibehaltung des aktuellen Preises ({profit}).",
     },
-    "metric_ped": {"en": "Price elasticity at optimum", "tr": "Optimumda fiyat esnekliği", "de": "Preiselastizität im Optimum"},
+    "metric_ped": {"en": "Price elasticity at recommended price", "tr": "Önerilen fiyatta fiyat esnekliği",
+                   "de": "Preiselastizität beim empfohlenen Preis"},
     "metric_ped_help": {
         "en": "% change in quantity for a 1% price change. Below -1 = elastic.",
         "tr": "Fiyattaki %1'lik değişime karşılık miktardaki % değişim. -1'in altı = esnek.",
@@ -348,9 +352,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "de": "Elastizität beim aktuellen Preis: **{value}**",
     },
     "details_xed": {
-        "en": "Cross-price elasticity at optimum: **{value}**",
-        "tr": "Optimumda çapraz fiyat esnekliği: **{value}**",
-        "de": "Kreuzpreiselastizität im Optimum: **{value}**",
+        "en": "Cross-price elasticity at recommended price: **{value}**",
+        "tr": "Önerilen fiyatta çapraz fiyat esnekliği: **{value}**",
+        "de": "Kreuzpreiselastizität beim empfohlenen Preis: **{value}**",
     },
     "details_xed_na": {
         "en": "Cross-price elasticity: n/a (no competitor data)",
@@ -390,9 +394,9 @@ STRINGS: dict[str, dict[str, str]] = {
     # ---------- export ----------
     "export_header": {"en": "Export", "tr": "Dışa aktar", "de": "Export"},
     "export_caption": {
-        "en": "Results for the current settings, including the shock scenario.",
-        "tr": "Şok senaryosu dahil, mevcut ayarlara göre sonuçlar.",
-        "de": "Ergebnisse für die aktuellen Einstellungen, einschließlich des Schock-Szenarios.",
+        "en": "Results for the current settings: today's recommendation first, then the 12-month scenario.",
+        "tr": "Mevcut ayarlara göre sonuçlar: önce bugünkü öneri, ardından 12 aylık senaryo.",
+        "de": "Ergebnisse für die aktuellen Einstellungen: zuerst die heutige Empfehlung, dann das 12-Monats-Szenario.",
     },
     "export_excel": {"en": "Download Excel", "tr": "Excel'i indir", "de": "Excel herunterladen"},
     "export_pdf": {"en": "Download PDF summary", "tr": "PDF özetini indir", "de": "PDF-Zusammenfassung herunterladen"},
@@ -426,6 +430,181 @@ STRINGS: dict[str, dict[str, str]] = {
         "tr": "{date} tarihinde Fiyat Optimizasyon Motoru ile oluşturuldu",
         "de": "Erstellt am {date} mit der Preisoptimierungs-Engine",
     },
+    # ---------- duplicates ----------
+    "dupes_label": {"en": "Remove duplicate rows", "tr": "Tekrarlanan satırları kaldır", "de": "Doppelte Zeilen entfernen"},
+    "dupes_help": {
+        "en": "Drops rows that are identical in every column, which usually come from combining overlapping "
+              "exports. Turn off for transaction logs where two identical sales on one day are real.",
+        "tr": "Tüm sütunlarda aynı olan satırları çıkarır; bunlar genellikle çakışan dışa aktarımların "
+              "birleştirilmesinden gelir. Aynı gün iki özdeş satışın gerçek olduğu işlem kayıtlarında kapatın.",
+        "de": "Entfernt Zeilen, die in allen Spalten gleich sind – meist Folge zusammengeführter, überlappender "
+              "Exporte. Für Transaktionsprotokolle ausschalten, in denen zwei gleiche Verkäufe am selben Tag echt sind.",
+    },
+    # ---------- fees and taxes ----------
+    "fees_header": {"en": "Fees & taxes", "tr": "Kesintiler ve vergiler", "de": "Gebühren & Steuern"},
+    "commission_label": {"en": "Marketplace commission (%)", "tr": "Pazaryeri komisyonu (%)", "de": "Marktplatzprovision (%)"},
+    "commission_help": {
+        "en": "Share of the selling price the marketplace keeps (e.g. Trendyol, Amazon: often 15–25%).",
+        "tr": "Pazaryerinin satış fiyatından aldığı pay (ör. Trendyol, Amazon: çoğunlukla %15–25).",
+        "de": "Anteil am Verkaufspreis, den der Marktplatz einbehält (z. B. Amazon: oft 15–25 %).",
+    },
+    "payment_fee_label": {"en": "Payment fee (%)", "tr": "Ödeme komisyonu (%)", "de": "Zahlungsgebühr (%)"},
+    "payment_fee_help": {
+        "en": "Card or payment-provider fee as a share of the selling price.",
+        "tr": "Satış fiyatının yüzdesi olarak kart veya ödeme kuruluşu komisyonu.",
+        "de": "Karten- oder Zahlungsanbietergebühr als Anteil am Verkaufspreis.",
+    },
+    "vat_toggle": {"en": "Uploaded prices include VAT", "tr": "Yüklenen fiyatlara KDV dahil", "de": "Hochgeladene Preise enthalten MwSt."},
+    "vat_toggle_help": {
+        "en": "Turn on if your prices are what customers pay including VAT. The VAT part is then not counted as "
+              "your revenue.",
+        "tr": "Fiyatlarınız müşterinin KDV dahil ödediği tutarsa açın. KDV kısmı gelirinizden sayılmaz.",
+        "de": "Einschalten, wenn Ihre Preise Endkundenpreise inklusive MwSt. sind. Der MwSt.-Anteil zählt dann "
+              "nicht zu Ihrem Umsatz.",
+    },
+    "vat_label": {"en": "VAT rate (%)", "tr": "KDV oranı (%)", "de": "MwSt.-Satz (%)"},
+    "vat_help": {
+        "en": "Prefilled with the country's standard rate. Change it for reduced rates.",
+        "tr": "Ülkenin standart oranıyla doldurulur. İndirimli oranlar için değiştirin.",
+        "de": "Mit dem Regelsatz des Landes vorbelegt. Für ermäßigte Sätze anpassen.",
+    },
+    "extra_cost_label": {
+        "en": "Extra cost per unit ({sym})",
+        "tr": "Birim başına ek maliyet ({sym})",
+        "de": "Zusatzkosten pro Stück ({sym})",
+    },
+    "extra_cost_help": {
+        "en": "Shipping, packaging and other per-unit costs not in Cost_Per_Unit. Treated as local costs, so "
+              "they rise with inflation in the scenario.",
+        "tr": "Cost_Per_Unit içinde olmayan kargo, ambalaj ve diğer birim maliyetler. Yerel maliyet sayılır, "
+              "senaryoda enflasyonla artar.",
+        "de": "Versand, Verpackung und andere Stückkosten, die nicht in Cost_Per_Unit stecken. Gelten als lokale "
+              "Kosten und steigen im Szenario mit der Inflation.",
+    },
+    # ---------- guardrails ----------
+    "rails_header": {"en": "Guardrails", "tr": "Fiyat kuralları", "de": "Preisregeln"},
+    "max_change_label": {
+        "en": "Max change from current price (%)",
+        "tr": "Mevcut fiyattan en fazla değişim (%)",
+        "de": "Max. Änderung ggü. aktuellem Preis (%)",
+    },
+    "max_change_help": {
+        "en": "Largest step up or down the recommendation may take in one go. 0 = no limit.",
+        "tr": "Önerinin tek seferde yapabileceği en büyük artış veya indirim. 0 = sınır yok.",
+        "de": "Größter Schritt nach oben oder unten, den die Empfehlung auf einmal machen darf. 0 = keine Grenze.",
+    },
+    "min_margin_label": {"en": "Min margin per unit (%)", "tr": "Birim başına asgari marj (%)", "de": "Mindestmarge pro Stück (%)"},
+    "min_margin_help": {
+        "en": "Net operating margin per unit (after VAT, fees and unit costs) as a share of the net price. 0 = off.",
+        "tr": "Net fiyatın yüzdesi olarak birim başına net faaliyet marjı (KDV, kesintiler ve birim maliyetlerden "
+              "sonra). 0 = kapalı.",
+        "de": "Netto-Betriebsmarge pro Stück (nach MwSt., Gebühren und Stückkosten) als Anteil am Nettopreis. 0 = aus.",
+    },
+    "floor_label": {"en": "Price floor ({sym})", "tr": "Taban fiyat ({sym})", "de": "Preisuntergrenze ({sym})"},
+    "ceiling_label": {"en": "Price ceiling ({sym})", "tr": "Tavan fiyat ({sym})", "de": "Preisobergrenze ({sym})"},
+    "floor_ceiling_help": {"en": "0 = no limit.", "tr": "0 = sınır yok.", "de": "0 = keine Grenze."},
+    "ending_label": {"en": "Price ending", "tr": "Fiyat sonu", "de": "Preisendung"},
+    "ending_help": {
+        "en": "Round the recommendation to a price point, picking the more profitable one below or above.",
+        "tr": "Öneriyi bir fiyat noktasına yuvarlar; alttaki ve üstteki noktadan daha kârlı olanı seçer.",
+        "de": "Rundet die Empfehlung auf einen Preispunkt und wählt den profitableren darunter oder darüber.",
+    },
+    "ending_none": {"en": "No rounding", "tr": "Yuvarlama yok", "de": "Keine Rundung"},
+    "ending_99": {"en": "x.99", "tr": "x,99", "de": "x,99"},
+    "ending_90": {"en": "x.90", "tr": "x,90", "de": "x,90"},
+    "ending_whole": {"en": "Whole number", "tr": "Tam sayı", "de": "Ganze Zahl"},
+    "limit_max_change": {"en": "max change", "tr": "en fazla değişim", "de": "max. Änderung"},
+    "limit_min_margin": {"en": "min margin", "tr": "asgari marj", "de": "Mindestmarge"},
+    "limit_floor": {"en": "price floor", "tr": "taban fiyat", "de": "Preisuntergrenze"},
+    "limit_ceiling": {"en": "price ceiling", "tr": "tavan fiyat", "de": "Preisobergrenze"},
+    # ---------- headline recommendation ----------
+    "metric_rec_price": {"en": "Recommended price (today)", "tr": "Önerilen fiyat (bugün)", "de": "Empfohlener Preis (heute)"},
+    "metric_rec_help": {
+        "en": "Most profitable price at today's costs and price level ({month} money), within your guardrails. "
+              "No inflation or exchange-rate shock is applied: see the scenario below for that. Current price: {price}.",
+        "tr": "Bugünkü maliyetler ve fiyat düzeyinde ({month} parasıyla), fiyat kurallarınız içinde en kârlı fiyat. "
+              "Enflasyon veya kur şoku uygulanmaz: bunun için aşağıdaki senaryoya bakın. Mevcut fiyat: {price}.",
+        "de": "Profitabelster Preis bei heutigen Kosten und heutigem Preisniveau (Geld von {month}) innerhalb Ihrer "
+              "Preisregeln. Ohne Inflations- oder Wechselkursschock – siehe dazu das Szenario unten. Aktueller Preis: {price}.",
+    },
+    "caption_unconstrained": {
+        "en": "Unconstrained optimum: {price} · limited by {limits}",
+        "tr": "Kısıtsız optimum: {price} · sınırlayan: {limits}",
+        "de": "Optimum ohne Regeln: {price} · begrenzt durch {limits}",
+    },
+    "caption_unrounded": {"en": "Before rounding: {price}", "tr": "Yuvarlamadan önce: {price}", "de": "Vor Rundung: {price}"},
+    "chart_recommended": {"en": "Recommended {price}", "tr": "Önerilen {price}", "de": "Empfohlen {price}"},
+    "chart_unconstrained": {"en": "Unconstrained {price}", "tr": "Kısıtsız {price}", "de": "Ohne Regeln {price}"},
+    # ---------- unit economics breakdown ----------
+    "breakdown_expander": {
+        "en": "Unit economics & tax breakdown",
+        "tr": "Birim ekonomisi ve vergi dökümü",
+        "de": "Stückökonomie & Steueraufschlüsselung",
+    },
+    "breakdown_title": {
+        "en": "Where each unit's price goes at {price}",
+        "tr": "{price} fiyatında her birimin fiyatı nereye gidiyor",
+        "de": "Wohin der Preis jedes Stücks bei {price} geht",
+    },
+    "breakdown_price": {"en": "Headline price", "tr": "Satış fiyatı", "de": "Verkaufspreis"},
+    "breakdown_vat": {"en": "VAT", "tr": "KDV", "de": "MwSt."},
+    "breakdown_commission": {"en": "Marketplace commission", "tr": "Pazaryeri komisyonu", "de": "Marktplatzprovision"},
+    "breakdown_payment": {"en": "Payment fee", "tr": "Ödeme komisyonu", "de": "Zahlungsgebühr"},
+    "breakdown_cogs": {"en": "Unit cost (COGS)", "tr": "Birim maliyet (SMM)", "de": "Stückkosten"},
+    "breakdown_extra": {"en": "Extra unit cost", "tr": "Ek birim maliyet", "de": "Zusatzkosten"},
+    "breakdown_margin": {"en": "Net operating margin", "tr": "Net faaliyet marjı", "de": "Netto-Betriebsmarge"},
+    "col_item": {"en": "Item", "tr": "Kalem", "de": "Position"},
+    "col_per_unit": {"en": "Per unit", "tr": "Birim başına", "de": "Pro Stück"},
+    "col_share": {"en": "% of price", "tr": "Fiyatın %'si", "de": "% vom Preis"},
+    "breakdown_caption": {
+        "en": "At this price you sell {units} units {per}: {contribution} margin minus {fixed} fixed costs = "
+              "{profit} net profit.",
+        "tr": "Bu fiyatta {per} {units} adet satarsınız: {contribution} marj eksi {fixed} sabit gider = "
+              "{profit} net kâr.",
+        "de": "Zu diesem Preis verkaufen Sie {units} Stück {per}: {contribution} Marge minus {fixed} Fixkosten = "
+              "{profit} Nettogewinn.",
+    },
+    # ---------- scenario ----------
+    "scenario_opt_label": {
+        "en": "Scenario optimum (prices of {month})",
+        "tr": "Senaryo optimumu ({month} fiyatlarıyla)",
+        "de": "Szenario-Optimum (Preise von {month})",
+    },
+    "scenario_opt_delta": {"en": "{pct:+.1f}% vs recommended", "tr": "{pct:+.1f}% (önerilen fiyata göre)", "de": "{pct:+.1f}% ggü. Empfehlung"},
+    "scenario_opt_help": {
+        "en": "Most profitable price if the inflation, exchange-rate and competitor changes above play out over "
+              "the next 12 months, in the nominal money of {month}. Guardrails are not applied.",
+        "tr": "Yukarıdaki enflasyon, kur ve rakip değişimleri önümüzdeki 12 ayda gerçekleşirse en kârlı fiyat; "
+              "{month} nominal parasıyla. Fiyat kuralları uygulanmaz.",
+        "de": "Profitabelster Preis, wenn die obigen Inflations-, Wechselkurs- und Konkurrenzänderungen in den "
+              "nächsten 12 Monaten eintreten, in nominalem Geld von {month}. Preisregeln werden nicht angewendet.",
+    },
+    "scenario_profit_label": {"en": "Scenario peak profit ({per})", "tr": "Senaryo zirve kârı ({per})", "de": "Szenario-Maximalgewinn ({per})"},
+    "scenario_cogs_label": {"en": "Scenario unit cost", "tr": "Senaryo birim maliyeti", "de": "Szenario-Stückkosten"},
+    # ---------- export summary ----------
+    "sum_unconstrained": {"en": "Unconstrained optimum (today)", "tr": "Kısıtsız optimum (bugün)", "de": "Optimum ohne Regeln (heute)"},
+    "sum_limits": {"en": "Limited by", "tr": "Sınırlayan", "de": "Begrenzt durch"},
+    "sum_guardrails": {"en": "Guardrails", "tr": "Fiyat kuralları", "de": "Preisregeln"},
+    "sum_guardrails_value": {
+        "en": "max change ±{max_change:.0f}% · min margin {min_margin:.0f}% · floor {floor} · ceiling {ceiling} · {ending}",
+        "tr": "en fazla değişim ±%{max_change:.0f} · asgari marj %{min_margin:.0f} · taban {floor} · tavan {ceiling} · {ending}",
+        "de": "max. Änderung ±{max_change:.0f} % · Mindestmarge {min_margin:.0f} % · Untergrenze {floor} · "
+              "Obergrenze {ceiling} · {ending}",
+    },
+    "sum_fees": {"en": "Fees & taxes", "tr": "Kesintiler ve vergiler", "de": "Gebühren & Steuern"},
+    "sum_fees_value": {
+        "en": "commission {commission:.1f}% · payment fee {payment:.1f}% · VAT {vat} · extra unit cost {extra}",
+        "tr": "komisyon %{commission:.1f} · ödeme komisyonu %{payment:.1f} · KDV {vat} · ek birim maliyet {extra}",
+        "de": "Provision {commission:.1f} % · Zahlungsgebühr {payment:.1f} % · MwSt. {vat} · Zusatzkosten {extra}",
+    },
+    "vat_included": {"en": "{rate:.1f}% included in prices", "tr": "%{rate:.1f} fiyatlara dahil", "de": "{rate:.1f} % in Preisen enthalten"},
+    "vat_excluded": {"en": "not included in prices", "tr": "fiyatlara dahil değil", "de": "nicht in Preisen enthalten"},
+    "sum_per_unit": {"en": "Per unit at recommended price", "tr": "Önerilen fiyatta birim başına", "de": "Pro Stück zum empfohlenen Preis"},
+    "sum_scenario": {"en": "Scenario (next 12 months)", "tr": "Senaryo (önümüzdeki 12 ay)", "de": "Szenario (nächste 12 Monate)"},
+    "sheet_scenario_curve": {"en": "Scenario curve", "tr": "Senaryo eğrisi", "de": "Szenario-Kurve"},
+    "col_vat": {"en": "VAT", "tr": "KDV", "de": "MwSt."},
+    "col_fees": {"en": "Fees", "tr": "Kesintiler", "de": "Gebühren"},
+    "col_margin": {"en": "Margin per unit (%)", "tr": "Birim marj (%)", "de": "Marge pro Stück (%)"},
     # ---------- backend messages (data_ingestion.py, optimizer.py) ----------
     "warn_season_short": {
         "en": "Seasonality needs at least {min_n} months of data ({n} available): fitted without it.",
@@ -541,6 +720,40 @@ STRINGS: dict[str, dict[str, str]] = {
         "en": "Capacity is binding at the optimum: more inventory/capacity would raise profit.",
         "tr": "Optimumda kapasite sınırı bağlayıcı: daha fazla stok/kapasite kârı artırır.",
         "de": "Die Kapazität ist im Optimum ausgeschöpft: Mehr Lager/Kapazität würde den Gewinn erhöhen.",
+    },
+    "warn_duplicates_dropped": {
+        "en": "{n} exact duplicate row(s) removed (often from combining overlapping exports). Turn off "
+              "'Remove duplicate rows' if they are real repeat sales.",
+        "tr": "{n} birebir tekrarlanan satır çıkarıldı (genellikle çakışan dışa aktarımların birleştirilmesinden). "
+              "Bunlar gerçek tekrar satışlarsa 'Tekrarlanan satırları kaldır' seçeneğini kapatın.",
+        "de": "{n} exakt doppelte Zeile(n) entfernt (meist durch zusammengeführte, überlappende Exporte). "
+              "Schalten Sie „Doppelte Zeilen entfernen“ aus, wenn es echte Wiederholungsverkäufe sind.",
+    },
+    "warn_duplicates_kept": {
+        "en": "{n} exact duplicate row(s) kept and counted as separate sales.",
+        "tr": "{n} birebir tekrarlanan satır korundu ve ayrı satışlar olarak sayıldı.",
+        "de": "{n} exakt doppelte Zeile(n) beibehalten und als separate Verkäufe gezählt.",
+    },
+    "warn_guardrail_conflict": {
+        "en": "The price floor/ceiling lies outside the allowed step from the current price: the max-change "
+              "limit was ignored.",
+        "tr": "Fiyat tabanı/tavanı, mevcut fiyattan izin verilen değişim aralığının dışında: en fazla değişim "
+              "sınırı yok sayıldı.",
+        "de": "Preisuntergrenze/-obergrenze liegt außerhalb der erlaubten Änderung ggü. dem aktuellen Preis: "
+              "Die maximale Änderung wurde ignoriert.",
+    },
+    "warn_guardrail_margin": {
+        "en": "No price within the allowed range reaches the {margin:.0f}% minimum margin: the most profitable "
+              "price in the range is shown instead.",
+        "tr": "İzin verilen aralıktaki hiçbir fiyat %{margin:.0f} asgari marja ulaşmıyor: bunun yerine aralıktaki "
+              "en kârlı fiyat gösteriliyor.",
+        "de": "Kein Preis im erlaubten Bereich erreicht die Mindestmarge von {margin:.0f} %: Stattdessen wird der "
+              "profitabelste Preis im Bereich gezeigt.",
+    },
+    "warn_guardrail_ending": {
+        "en": "No price with the chosen ending fits the guardrails: the price is shown unrounded.",
+        "tr": "Seçilen fiyat sonuyla kurallara uyan bir fiyat yok: fiyat yuvarlanmadan gösteriliyor.",
+        "de": "Kein Preis mit der gewählten Endung erfüllt die Regeln: Der Preis wird ungerundet gezeigt.",
     },
 }
 

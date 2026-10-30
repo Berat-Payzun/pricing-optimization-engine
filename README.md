@@ -4,12 +4,15 @@
 
 A Streamlit app that finds the **profit-maximizing price** for a product from its sales history and stress-tests it against **live macroeconomic data**: CPI inflation and exchange rates for the selected country.
 
-Upload a CSV or Excel file of past prices and quantities. The engine fits a demand curve, sweeps 2,000 candidate prices, and charts revenue, cost and net profit against price. Sliders let you simulate inflation, currency and competitor shocks and see how the optimal price and profit move.
+Upload a CSV or Excel file of past prices and quantities. The engine fits a demand curve, sweeps 2,000 candidate prices, and charts revenue, cost and net profit against price. The headline is a **recommended price for today**: today's costs and price level, after VAT and channel fees, within your guardrails. Separately, sliders simulate the next 12 months of inflation, currency and competitor shocks.
 
 ## Features
 
 - **Demand estimation:** linear OLS or log-log (constant elasticity) regression, with R² shown for both so you can pick the better fit.
 - **Seasonality (optional):** month-of-year effects in the demand fit, so a seasonal peak isn't mistaken for low price sensitivity. On by default with 24+ months of data.
+- **Today's recommendation vs the 12-month scenario:** the headline price uses today's costs and price level, with no shock. The macro scenario has its own cards and chart below the sliders, in the money of 12 months after the last sales month, so a forecast of inflation is never mistaken for a price rise to make today.
+- **Fees & taxes:** marketplace commission % and payment fee % (charged on the customer-facing price), a "prices include VAT" toggle with the country's standard rate prefilled (TR 20%, DE/Eurozone 19%, FR 20%, IT 22%, ES 21%, UK 20%, US/Brazil/Global 0%), and an extra per-unit cost for shipping or packaging. A **unit economics & tax breakdown** shows where each unit's price goes.
+- **Guardrails:** max change from the current price (±15% by default), minimum margin per unit, price floor and ceiling, and rounding to x.99, x.90 or whole numbers. When a rule binds, the unconstrained optimum and the limiting rule are shown next to the recommendation.
 - **Uncertainty range:** a bootstrap (200 refits on resampled months) gives a 90% range for the optimal price, shown under the metric and as a band on the chart.
 - **Competitor-aware (optional):** if the CSV has competitor prices, the model estimates the cross-price effect (XED) and enables a competitor-shock slider.
 - **Inflation-adjusted history:** historical prices are deflated with the country's CPI before fitting. Without this, in high-inflation economies like Turkey, nominal price rises would be mistaken for real ones.
@@ -25,7 +28,8 @@ Upload a CSV or Excel file of past prices and quantities. The engine fits a dema
 - **Operational limits:** capacity/inventory ceiling and fixed costs; results shown per month, quarter or year.
 - **Unit cost override:** test "what if my unit cost were X?" without editing the file.
 - **Several products per file:** add a `Product` column and pick the product in the sidebar.
-- **Export:** download an Excel workbook (summary, profit curve, monthly data, models) or a one-page PDF summary with the main chart.
+- **Duplicate rows:** exact duplicate rows (common when overlapping exports are combined) are removed with a warning. Turn the option off for transaction logs where identical sales are real.
+- **Export:** download an Excel workbook (summary, today's profit curve, scenario curve, monthly data, models) or a PDF summary with the main chart. Text in the workbook is always stored as text, so a product name like `=HYPERLINK(...)` from an uploaded file can't become a live formula.
 - **Three languages:** English, Turkish and German, switchable from the sidebar without losing inputs.
 
 ## Quick start
@@ -90,12 +94,14 @@ To add a country, add an entry to `COUNTRY_MAP` and `FALLBACK_MACRO` in `src/con
 | 4. Competitor shock | Demand is re-predicted at `P_comp × (1 + shift)`. |
 | 5. Capacity cap | `Q_sold = min(Q_demand × period_mult, capacity)` |
 | 6. FX shock | The imported share follows the exchange rate and US inflation: `share × (1 + fx_shift) × (1 + π_USD)` |
-| 7. Inflation | The rest follows local inflation: `COGS_final = COGS × [share × (1 + fx_shift)(1 + π_USD) + (1 − share)(1 + π)]`, `Fixed_final = Fixed_monthly × (1 + π) × period_mult` |
-| 8. Optimization | Profit = `(P − COGS_final) × Q_sold − Fixed_final`, evaluated on a 2,000-point grid from just below unit cost to the max test price. The argmax is the optimal price P*. With price pass-through on, demand is evaluated at the real price `P / (1 + π)` and the competitor's price rises by `(1 + π)`. |
+| 7. Inflation | The rest follows local inflation: `COGS_final = COGS × [share × (1 + fx_shift)(1 + π_USD) + (1 − share)(1 + π)] + Extra × (1 + π)`, `Fixed_final = Fixed_monthly × (1 + π) × period_mult` |
+| 8. Optimization | Profit = `(P / (1 + VAT) − (commission + payment fee) × P − COGS_final) × Q_sold − Fixed_final`, evaluated on a 2,000-point grid from just below unit cost to the max test price. The argmax is the optimal price P*. With price pass-through on, demand is evaluated at the real price `P / (1 + π)` and the competitor's price rises by `(1 + π)`. |
 
-For linear demand without a capacity cap, the result matches the closed-form optimum `P* = (a + c·P_comp − b·COGS) / (−2b)` (verified in the tests).
+| 9. Guardrails | Today's optimum is restricted to `current × (1 ± max change)`, the floor/ceiling and the minimum margin `(P/(1+VAT) − fees − COGS) / (P/(1+VAT))`, then rounded to the better of the price points below and above with the chosen ending. If the floor or ceiling lies outside the max-change band, max change is ignored; if no price in the band reaches the minimum margin, the margin rule is dropped. Both cases are flagged. The 12-month scenario is not restricted. |
 
-**90% range.** The months are resampled with replacement 200 times. The demand model is refitted each time and P* recomputed under the same scenario. The 5th–95th percentiles form the range.
+For linear demand without a capacity cap, the result matches the closed-form optimum `P* = (a + c·P_comp)/(−2b) + COGS/(2k)` with `k = 1/(1 + VAT) − fee rate` (`k = 1` without VAT or fees; verified in the tests).
+
+**90% range.** The months are resampled with replacement 200 times. The demand model is refitted each time and today's P* recomputed (with the same fees, before guardrails). The 5th–95th percentiles form the range.
 
 **Assumptions and limits**
 - The demand curve is fitted in *today's money*.

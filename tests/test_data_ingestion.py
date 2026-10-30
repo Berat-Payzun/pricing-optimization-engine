@@ -160,3 +160,32 @@ def test_excel_upload_with_turkish_headers_and_products():
     # Competitor gaps are filled within the product, not from another product
     assert kahve["Competitor_Price"].tolist() == pytest.approx([10.0, 10.0])
     assert df.loc[df["Product"] == "Çay", "Competitor_Price"].tolist() == pytest.approx([19.0])
+
+
+DUPES = """
+Date,Price_Charged,Quantity_Sold
+2024-01-01,10,5
+2024-01-01,10,5
+2024-01-02,11,4
+2024-01-02,11,4
+2024-01-03,12,3
+"""
+
+
+def test_exact_duplicate_rows_dropped_with_warning():
+    df, warnings = load_csv(csv(DUPES), default_cogs=5)
+    assert len(df) == 3 and df["Quantity_Sold"].sum() == 12
+    assert any(w.key == "warn_duplicates_dropped" and w.params["n"] == 2 for w in warnings)
+
+
+def test_duplicate_rows_kept_on_request():
+    df, warnings = load_csv(csv(DUPES), default_cogs=5, drop_duplicates=False)
+    assert len(df) == 5
+    assert any(w.key == "warn_duplicates_kept" and w.params["n"] == 2 for w in warnings)
+
+
+def test_rows_differing_only_by_product_are_not_duplicates():
+    data = "Date,Price_Charged,Quantity_Sold,Product\n2024-01-01,10,5,A\n2024-01-01,10,5,B"
+    df, warnings = load_csv(csv(data), default_cogs=5)
+    assert len(df) == 2
+    assert not any(getattr(w, "key", "") == "warn_duplicates_dropped" for w in warnings)

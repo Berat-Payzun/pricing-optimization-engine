@@ -16,10 +16,11 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from config import BOOTSTRAP_SAMPLES, COUNTRY_MAP, DEFAULTS, PERIOD_MULT, SEASONAL_MIN_MONTHS
+from config import BOOTSTRAP_SAMPLES, COUNTRY_MAP, DEFAULTS, MAX_CHANGE_DEFAULT, PERIOD_MULT, SEASONAL_MIN_MONTHS
 from data_ingestion import PRODUCT, DataValidationError, aggregate, deflate, load_csv
 from macro_api import get_fx, get_inflation
-from optimizer import ScenarioParams, fit_demand, optimal_price_range, run_scenario
+from optimizer import (ENDINGS, Guardrails, ScenarioParams, elasticities, fit_demand, optimal_price_range, recommend,
+                       run_scenario)
 from report import Chart, Series, VLine, build_excel, build_pdf
 from translations import LANGUAGES, localize, translate
 
@@ -49,8 +50,8 @@ def cached_fx(country: str):
 
 
 @st.cache_data(show_spinner=False)
-def load_rows(raw: bytes, default_cogs: float):
-    return load_csv(io.BytesIO(raw), default_cogs)
+def load_rows(raw: bytes, default_cogs: float, drop_duplicates: bool):
+    return load_csv(io.BytesIO(raw), default_cogs, drop_duplicates)
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
@@ -127,6 +128,7 @@ with st.sidebar:
     if upload is None:
         st.caption(t("sample_caption"))
         st.download_button(t("sample_download"), SAMPLE_PATH.read_bytes(), "sample_data.csv", "text/csv")
+    drop_dupes = st.toggle(t("dupes_label"), value=True, help=t("dupes_help"), key="drop_dupes")
     product_slot = st.container()  # filled once the file is read, if it has a product column
 
     country = st.selectbox(t("country_label"), list(COUNTRY_MAP), format_func=lambda c: t(f"country_{c}"), key="country")
@@ -158,7 +160,7 @@ st.caption(t("app_caption", country=t(f"country_{country}"), currency=COUNTRY_MA
 raw = upload.getvalue() if upload is not None else SAMPLE_PATH.read_bytes()
 product = None
 try:
-    rows, data_warnings = load_rows(raw, default_cogs)
+    rows, data_warnings = load_rows(raw, default_cogs, drop_dupes)
     if PRODUCT in rows:
         with product_slot:
             product = st.selectbox(t("product_label"), sorted(rows[PRODUCT].unique()), help=t("product_help"),
@@ -202,6 +204,31 @@ with st.sidebar:
                                 value=float(round(2 * model.p_max, 2)),
                                 key=f"max_price_{model_kind}_{product}_{len(agg)}", help=t("max_price_help"))
 
+    st.subheader(t("fees_header"))
+    commission = st.number_input(t("commission_label"), 0.0, 90.0, 0.0, step=0.5, help=t("commission_help"),
+                                 key="commission")
+    payment_fee = st.number_input(t("payment_fee_label"), 0.0, 20.0, 0.0, step=0.1, help=t("payment_fee_help"),
+                                  key="payment_fee")
+    prices_incl_vat = st.toggle(t("vat_toggle"), value=False, help=t("vat_toggle_help"), key="prices_incl_vat")
+    # Keyed by country so the prefilled rate follows the country selection
+    vat_rate = st.number_input(t("vat_label"), 0.0, 50.0, float(COUNTRY_MAP[country]["vat"]), step=0.5,
+                               help=t("vat_help"), key=f"vat_{country}", disabled=not prices_incl_vat)
+    extra_cost = st.number_input(t("extra_cost_label", sym=sym), min_value=0.0, value=0.0, help=t("extra_cost_help"),
+                                 key="extra_unit_cost")
+
+    st.subheader(t("rails_header"))
+    max_change = st.number_input(t("max_change_label"), 0.0, 100.0, MAX_CHANGE_DEFAULT, step=1.0,
+                                 help=t("max_change_help"), key="max_change")
+    min_margin = st.number_input(t("min_margin_label"), 0.0, 95.0, 0.0, step=1.0, help=t("min_margin_help"),
+                                 key="min_margin")
+    f1, f2 = st.columns(2)
+    price_floor = f1.number_input(t("floor_label", sym=sym), min_value=0.0, value=0.0, help=t("floor_ceiling_help"),
+                                  key="price_floor")
+    price_ceiling = f2.number_input(t("ceiling_label", sym=sym), min_value=0.0, value=0.0,
+                                    help=t("floor_ceiling_help"), key="price_ceiling")
+    ending = st.selectbox(t("ending_label"), ENDINGS, format_func=lambda e: t(f"ending_{e.lstrip('.')}"),
+                          help=t("ending_help"), key="ending")
+
 # Live macro values become the slider defaults, refreshed whenever the country changes
 if st.session_state.get("shock_country") != country:
     reset_shocks(infl, fx)
@@ -238,32 +265,62 @@ if not model.has_comp:
 usd_inflation = inflation / 100 if is_usd else us_infl.value / 100
 
 common = dict(base_cogs=base_cogs, fixed_monthly=fixed_monthly, capacity=capacity or np.inf, period=timeframe,
-              import_share=import_share / 100, base_comp_price=base_comp, current_price=current_price, max_price=max_price)
+              import_share=import_share / 100, base_comp_price=base_comp, current_price=current_price, max_price=max_price,
+              commission=commission / 100, payment_fee=payment_fee / 100,
+              vat=vat_rate / 100 if prices_incl_vat else 0.0, extra_unit_cost=extra_cost)
+# Headline: today's costs and price level, no shock. Scenario: the sliders, 12 months out.
+today_params = ScenarioParams(**common)
+today = run_scenario(model, today_params)
 scenario = ScenarioParams(**common, inflation=inflation / 100, usd_inflation=usd_inflation,
                           fx_shift=(0 if is_usd else fx_shift) / 100, comp_shift=comp_shift / 100,
                           price_passthrough=passthrough)
 result = run_scenario(model, scenario)
-today = run_scenario(model, ScenarioParams(**common))
+rails = Guardrails(max_change=max_change / 100, min_margin=min_margin / 100, floor=price_floor,
+                   ceiling=price_ceiling, ending=ending)
+rec = recommend(model, today_params, today, rails)
 try:
-    price_range = cached_range(agg, model_kind, seasonal, asdict(scenario))
+    price_range = cached_range(agg, model_kind, seasonal, asdict(today_params))
 except ValueError:
     price_range = None
 
-opt, base = result.optimal, result.baseline
+opt, rec_row = result.optimal, rec.row
+unconstrained = today.optimal["price"]
+ped_rec, xed_rec = elasticities(model, rec.price, base_comp)
+money_month = month_year(agg.index.max())  # the demand model's prices are in this month's money
+scenario_month = month_year(agg.index.max() + pd.DateOffset(months=12))
+limits = ", ".join(t(f"limit_{b}") for b in rec.binding)
+
+# Per-unit split of the recommended price (today's costs)
+breakdown = [
+    ("breakdown_price", rec.price),
+    ("breakdown_vat", -(rec.price - rec.price / (1 + today_params.vat))),
+    ("breakdown_commission", -today_params.commission * rec.price),
+    ("breakdown_payment", -today_params.payment_fee * rec.price),
+    ("breakdown_cogs", -(today.cogs_final - extra_cost)),
+    ("breakdown_extra", -extra_cost),
+]
+breakdown = breakdown[:1] + [(k, v) for k, v in breakdown[1:] if abs(v) > 1e-12]
+unit_margin = sum(v for _, v in breakdown)
 
 # ---------- metrics ----------
 
 with metrics_area:
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     with c1:
-        st.metric(t("metric_opt_price"), money(opt["price"], sym), t("metric_opt_delta", pct=(opt["price"] / current_price - 1) * 100),
-                  help=t("metric_opt_help", price=money(current_price, sym)))
+        st.metric(t("metric_rec_price"), money(rec.price, sym),
+                  t("metric_opt_delta", pct=(rec.price / current_price - 1) * 100),
+                  help=t("metric_rec_help", month=money_month, price=money(current_price, sym)))
+        if rec.binding:
+            st.caption(t("caption_unconstrained", price=money(unconstrained, sym), limits=limits))
+        elif abs(rec.price - unconstrained) >= 0.005:
+            st.caption(t("caption_unrounded", price=money(unconstrained, sym)))
         if price_range:
             st.caption(t("metric_opt_range", low=money(price_range[0], sym), high=money(price_range[1], sym)),
                        help=t("metric_opt_range_help", n=BOOTSTRAP_SAMPLES))
-    c2.metric(t("metric_profit", per=per), money(opt["profit"], sym), money(opt["profit"] - base["profit"], sym),
-              help=t("metric_profit_help", profit=money(base["profit"], sym)))
-    c3.metric(t("metric_ped"), f"{result.ped_opt:.2f}", help=t("metric_ped_help"))
+    c2.metric(t("metric_profit", per=per), money(rec_row["profit"], sym),
+              money(rec_row["profit"] - today.baseline["profit"], sym),
+              help=t("metric_profit_help", profit=money(today.baseline["profit"], sym)))
+    c3.metric(t("metric_ped"), f"{ped_rec:.2f}", help=t("metric_ped_help"))
     with c4:
         st.metric(t("metric_r2"), f"{model.r2:.2f}", help=t("metric_r2_help"))
         if model.kind == "loglog" and model.n_dropped:
@@ -278,14 +335,40 @@ with metrics_area:
                   delta_color="inverse")
         macro_badge(fx, t("badge_fx"))
 
-    for w in model.warnings + result.warnings:
+    for w in dict.fromkeys(model.warnings + today.warnings + rec.warnings):
         st.warning(localize(w, lang), icon=":material/warning:")
+
+col = colors()
+units = t("units")
+
+with metrics_area, st.expander(t("breakdown_expander")):
+    b1, b2 = st.columns([3, 2])
+    labels = [t(k) for k, _ in breakdown] + [t("breakdown_margin")]
+    values = [v for _, v in breakdown] + [unit_margin]
+    with b1:
+        fig = go.Figure(go.Waterfall(
+            x=labels, y=values, measure=["absolute"] + ["relative"] * (len(breakdown) - 1) + ["total"],
+            text=[money(v, sym) for v in values], textposition="outside",
+            increasing=dict(marker=dict(color=col["s1"])), decreasing=dict(marker=dict(color=col["s2"])),
+            totals=dict(marker=dict(color=col["s3"] if unit_margin >= 0 else col["s2"])),
+            connector=dict(line=dict(color=col["muted"], width=1)), hoverinfo="skip"))
+        style(fig, t("breakdown_title", price=money(rec.price, sym)), "", sym, height=340)
+        fig.update_layout(showlegend=False)
+        st.plotly_chart(fig, width="stretch")
+    with b2:
+        breakdown_table = pd.DataFrame({
+            t("col_item"): labels,
+            t("col_per_unit"): [money(v, sym) for v in values],
+            t("col_share"): [f"{v / rec.price * 100:.1f}%" for v in values],
+        })
+        st.dataframe(breakdown_table, hide_index=True, width="stretch")
+        st.caption(t("breakdown_caption", units=f"{rec_row['q_sold']:,.0f}", per=per,
+                     contribution=money(unit_margin * rec_row["q_sold"], sym), fixed=money(today.fixed_final, sym),
+                     profit=money(rec_row["profit"], sym)))
 
 # ---------- charts ----------
 
-col = colors()
-curve = result.curve
-units = t("units")
+curve = today.curve
 
 with charts_area:
     fig = go.Figure()
@@ -296,26 +379,30 @@ with charts_area:
     if price_range:
         fig.add_vrect(x0=price_range[0], x1=price_range[1], fillcolor=col["range"], line_width=0,
                       annotation_text=t("chart_range"), annotation_position="bottom left")
-    fig.add_trace(go.Scatter(x=curve["price"], y=curve["profit"], name=t("chart_net_profit"), line=dict(color=col["s1"], width=2.5)))
-    fig.add_trace(go.Scatter(x=curve["price"], y=curve["revenue"], name=t("chart_revenue"), line=dict(color=col["s2"], width=2)))
-    fig.add_trace(go.Scatter(x=curve["price"], y=curve["total_cost"], name=t("chart_total_cost"), line=dict(color=col["s3"], width=2)))
+    fig.add_trace(go.Scatter(x=curve["price"], y=curve["profit"], name=t("chart_net_profit"), line=dict(color=col["s1"], width=3)))
+    fig.add_trace(go.Scatter(x=curve["price"], y=curve["revenue"], name=t("chart_revenue"), line=dict(color=col["s2"], width=1.5)))
+    fig.add_trace(go.Scatter(x=curve["price"], y=curve["total_cost"], name=t("chart_total_cost"), line=dict(color=col["s3"], width=1.5)))
     fig.add_hline(y=0, line=dict(color=col["muted"], width=1))
-    fig.add_vline(x=opt["price"], line=dict(color=col["s1"], width=1.5, dash="dot"),
-                  annotation_text=t("chart_optimal", price=money(opt["price"], sym)), annotation_position="top right")
+    fig.add_vline(x=rec.price, line=dict(color=col["s1"], width=1.5, dash="dot"),
+                  annotation_text=t("chart_recommended", price=money(rec.price, sym)), annotation_position="top right")
+    if abs(rec.price - unconstrained) >= 0.005:
+        fig.add_vline(x=unconstrained, line=dict(color=col["muted"], width=1, dash="dot"),
+                      annotation_text=t("chart_unconstrained", price=money(unconstrained, sym)),
+                      annotation_position="top left")
     fig.add_vline(x=current_price, line=dict(color=col["muted"], width=1.5, dash="dash"),
                   annotation_text=t("chart_current", price=money(current_price, sym)), annotation_position="bottom right")
-    fig.add_trace(go.Scatter(x=[opt["price"]], y=[opt["profit"]], mode="markers", name=t("chart_peak"),
+    fig.add_trace(go.Scatter(x=[rec.price], y=[rec_row["profit"]], mode="markers", name=t("chart_peak"),
                              marker=dict(color=col["s1"], size=11, line=dict(color="white", width=2)),
                              showlegend=False, hoverinfo="skip"))
-    for be in result.break_evens:
+    for be in today.break_evens:
         fig.add_trace(go.Scatter(x=[be], y=[0], mode="markers", showlegend=False, hoverinfo="skip",
                                  marker=dict(color=col["muted"], size=9, symbol="diamond")))
     style(fig, t("chart_main_title", per=per), t("axis_price", sym=sym), f"{sym} {per}", height=460)
     fig.update_traces(hovertemplate=f"{sym}%{{y:,.0f}}", selector=dict(mode="lines"))
     st.plotly_chart(fig, width="stretch")
-    if result.break_evens:
-        st.caption(t("caption_break_even", prices=", ".join(money(b, sym) for b in result.break_evens),
-                     cogs=money(result.cogs_final, sym), fixed=money(result.fixed_final, sym), per=per))
+    if today.break_evens:
+        st.caption(t("caption_break_even", prices=", ".join(money(b, sym) for b in today.break_evens),
+                     cogs=money(today.cogs_final, sym), fixed=money(today.fixed_final, sym), per=per))
 
     left, right = st.columns(2)
     with left:
@@ -333,27 +420,39 @@ with charts_area:
         st.plotly_chart(fig, width="stretch")
     with right:
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=curve["price"], y=today.curve["profit"], name=t("chart_today"),
-                                 line=dict(color=col["muted"], width=2, dash="dash")))
-        fig.add_trace(go.Scatter(x=curve["price"], y=curve["profit"], name=t("chart_scenario"), line=dict(color=col["s1"], width=2.5)))
-        fig.add_hline(y=0, line=dict(color=col["muted"], width=1))
-        style(fig, t("chart_shock_title", per=per), t("axis_price", sym=sym), f"{sym} {per}")
-        fig.update_traces(hovertemplate=f"{sym}%{{y:,.0f}}")
+        fig.add_trace(go.Scatter(x=agg.index, y=agg["Price_Charged"], name=t("chart_your_price"), line=dict(color=col["s1"], width=2)))
+        if "Competitor_Price" in agg:
+            fig.add_trace(go.Scatter(x=agg.index, y=agg["Competitor_Price"], name=t("chart_comp_price"), line=dict(color=col["s2"], width=2)))
+        if use_real and infl.series is not None:
+            fig.add_trace(go.Scatter(x=agg.index, y=agg["Real_Price"], name=t("chart_real_price"),
+                                     line=dict(color=col["s3"], width=2, dash="dot")))
+        style(fig, t("chart_history_title"), "", t("axis_price", sym=sym))
+        fig.update_traces(hovertemplate=f"{sym}%{{y:,.2f}}")
         st.plotly_chart(fig, width="stretch")
-        d_price = opt["price"] - today.optimal["price"]
-        d_profit = opt["profit"] - today.optimal["profit"]
-        st.caption(t("caption_shock", d_price=money(d_price, sym), d_profit=money(d_profit, sym), per=per))
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=agg.index, y=agg["Price_Charged"], name=t("chart_your_price"), line=dict(color=col["s1"], width=2)))
-    if "Competitor_Price" in agg:
-        fig.add_trace(go.Scatter(x=agg.index, y=agg["Competitor_Price"], name=t("chart_comp_price"), line=dict(color=col["s2"], width=2)))
-    if use_real and infl.series is not None:
-        fig.add_trace(go.Scatter(x=agg.index, y=agg["Real_Price"], name=t("chart_real_price"),
-                                 line=dict(color=col["s3"], width=2, dash="dot")))
-    style(fig, t("chart_history_title"), "", t("axis_price", sym=sym), height=340)
-    fig.update_traces(hovertemplate=f"{sym}%{{y:,.2f}}")
-    st.plotly_chart(fig, width="stretch")
+# ---------- scenario results (below the sliders) ----------
+
+sc1, sc2, sc3 = st.columns(3)
+sc1.metric(t("scenario_opt_label", month=scenario_month), money(opt["price"], sym),
+           t("scenario_opt_delta", pct=(opt["price"] / rec.price - 1) * 100),
+           help=t("scenario_opt_help", month=scenario_month))
+sc2.metric(t("scenario_profit_label", per=per), money(opt["profit"], sym))
+sc3.metric(t("scenario_cogs_label"), money(result.cogs_final, sym))
+for w in result.warnings:
+    st.warning(localize(w, lang), icon=":material/warning:")
+
+fig = go.Figure()
+# Each run has its own price grid, so each line is drawn against its own prices
+fig.add_trace(go.Scatter(x=today.curve["price"], y=today.curve["profit"], name=t("chart_today"),
+                         line=dict(color=col["muted"], width=2, dash="dash")))
+fig.add_trace(go.Scatter(x=result.curve["price"], y=result.curve["profit"], name=t("chart_scenario"),
+                         line=dict(color=col["s1"], width=2.5)))
+fig.add_hline(y=0, line=dict(color=col["muted"], width=1))
+style(fig, t("chart_shock_title", per=per), t("axis_price", sym=sym), f"{sym} {per}")
+fig.update_traces(hovertemplate=f"{sym}%{{y:,.0f}}")
+st.plotly_chart(fig, width="stretch")
+st.caption(t("caption_shock", d_price=money(opt["price"] - unconstrained, sym),
+             d_profit=money(opt["profit"] - today.optimal["profit"], sym), per=per))
 
 # ---------- details ----------
 
@@ -369,9 +468,8 @@ with st.expander(t("details_expander")):
             model_rows.append(dict(zip(columns, (t(f"model_{kind}"), *fit))))
         model_table = pd.DataFrame(model_rows)
         st.dataframe(model_table, hide_index=True)
-        xed = result.xed_opt
-        xed_line = t("details_xed", value=f"{xed:.2f}") if xed is not None else t("details_xed_na")
-        st.markdown(f"- {t('details_ped_current', value=f'{result.ped_current:.2f}')}\n- {xed_line}")
+        xed_line = t("details_xed", value=f"{xed_rec:.2f}") if xed_rec is not None else t("details_xed_na")
+        st.markdown(f"- {t('details_ped_current', value=f'{today.ped_current:.2f}')}\n- {xed_line}")
         st.markdown(f"- {t('details_price_range', low=money(model.p_min, sym), high=money(model.p_max, sym))}")
     with m2:
         st.markdown(f"**{t('details_notes')}**")
@@ -391,42 +489,66 @@ def on_off(flag: bool) -> str:
     return t("sum_on") if flag else t("sum_off")
 
 
+vat_text = t("vat_included", rate=vat_rate) if prices_incl_vat else t("vat_excluded")
+per_unit = " · ".join(f"{t(k)} {money(v, sym)}" for k, v in breakdown[1:])
 summary = ([(t("product_label"), product)] if product else []) + [
     (t("country_label"), f"{t(f'country_{country}')} ({COUNTRY_MAP[country]['currency']})"),
     (t("timeframe_label"), t(f"timeframe_{timeframe}")),
     (t("model_label"), t(f"model_{model_kind}")),
     (t("season_label"), on_off(model.season is not None)),
     (t("real_label"), on_off(use_real)),
+    (t("sum_current_price"), money(current_price, sym)),
+    (t("metric_rec_price"), f"{money(rec.price, sym)} · {t('metric_opt_delta', pct=(rec.price / current_price - 1) * 100)}"),
+    (t("sum_unconstrained"), money(unconstrained, sym)),
+    (t("sum_limits"), limits or t("sum_none")),
+    (t("sum_range"), f"{money(price_range[0], sym)} – {money(price_range[1], sym)}" if price_range else "—"),
+    (t("metric_profit", per=per), money(rec_row["profit"], sym)),
+    (t("sum_profit_current", per=per), money(today.baseline["profit"], sym)),
+    (t("metric_ped"), f"{ped_rec:.2f}"),
+    (t("metric_r2"), f"{model.r2:.2f}"),
+    (t("sum_guardrails"), t("sum_guardrails_value", max_change=max_change, min_margin=min_margin,
+                            floor=money(price_floor, sym) if price_floor else "—",
+                            ceiling=money(price_ceiling, sym) if price_ceiling else "—",
+                            ending=t(f"ending_{ending.lstrip('.')}"))),
+    (t("sum_fees"), t("sum_fees_value", commission=commission, payment=payment_fee, vat=vat_text,
+                      extra=money(extra_cost, sym))),
+    (t("sum_per_unit"), f"{per_unit} · {t('breakdown_margin')} {money(unit_margin, sym)} "
+                        f"({unit_margin / rec.price * 100:.1f}%)"),
+    (t("sum_unit_cost"), money(today.cogs_final, sym)),
+    (t("sum_fixed", per=per), money(today.fixed_final, sym)),
+    (t("sum_break_even"), ", ".join(money(b, sym) for b in today.break_evens) or t("sum_none")),
+    (t("sum_equation"), model.equation()),
+    (t("sum_scenario"), scenario_month),
     (t("shock_infl"), f"{inflation:.1f}%"),
     (t("shock_fx"), "—" if is_usd else f"{fx_shift:+.1f}%"),
     (t("shock_comp"), f"{comp_shift:+.0f}%" if model.has_comp else "—"),
     (t("shock_passthrough"), on_off(passthrough)),
-    (t("sum_current_price"), money(current_price, sym)),
-    (t("metric_opt_price"), f"{money(opt['price'], sym)} · {t('metric_opt_delta', pct=(opt['price'] / current_price - 1) * 100)}"),
-    (t("sum_range"), f"{money(price_range[0], sym)} – {money(price_range[1], sym)}" if price_range else "—"),
-    (t("metric_profit", per=per), money(opt["profit"], sym)),
-    (t("sum_profit_current", per=per), money(base["profit"], sym)),
-    (t("metric_ped"), f"{result.ped_opt:.2f}"),
-    (t("metric_r2"), f"{model.r2:.2f}"),
-    (t("sum_unit_cost"), money(result.cogs_final, sym)),
-    (t("sum_fixed", per=per), money(result.fixed_final, sym)),
-    (t("sum_break_even"), ", ".join(money(b, sym) for b in result.break_evens) or t("sum_none")),
-    (t("sum_equation"), model.equation()),
+    (t("scenario_opt_label", month=scenario_month), money(opt["price"], sym)),
+    (t("scenario_profit_label", per=per), money(opt["profit"], sym)),
+    (t("scenario_cogs_label"), money(result.cogs_final, sym)),
     (t("metric_cpi"), f"{infl.value:.1f}% ({infl.source}, {infl.as_of or '—'})"),
     (t("metric_fx", currency=COUNTRY_MAP[country]["currency"]), f"{fx.value:,.4f} ({fx.source})"),
 ]
-curve_table = curve[["price", "q_demand", "q_sold", "revenue", "total_cost", "profit", "cap_binding"]].rename(columns={
+curve_columns = {
     "price": t("col_price"), "q_demand": t("col_q_demand"), "q_sold": t("col_q_sold"), "revenue": t("chart_revenue"),
-    "total_cost": t("chart_total_cost"), "profit": t("chart_net_profit"), "cap_binding": t("col_cap_binding"),
-}).round(4)
+    "vat": t("col_vat"), "fees": t("col_fees"), "total_cost": t("chart_total_cost"), "profit": t("chart_net_profit"),
+    "margin_pct": t("col_margin"), "cap_binding": t("col_cap_binding"),
+}
+
+
+def curve_table(c: pd.DataFrame) -> pd.DataFrame:
+    return c.assign(margin_pct=c["margin_pct"] * 100)[list(curve_columns)].rename(columns=curve_columns).round(4)
+
+
 sheets = {
     t("sheet_summary"): pd.DataFrame(summary, columns=[t("sum_item"), t("sum_value")]),
-    t("sheet_curve"): curve_table,
+    t("sheet_curve"): curve_table(today.curve),
+    t("sheet_scenario_curve"): curve_table(result.curve),
     t("sheet_monthly"): agg.round(4).reset_index(),
     t("sheet_models"): model_table,
 }
-notes = list(dict.fromkeys(localize(w, lang) for w in
-                           model.warnings + result.warnings + data_warnings + deflate_warnings))
+notes = list(dict.fromkeys(localize(w, lang) for w in model.warnings + today.warnings + rec.warnings
+                           + result.warnings + data_warnings + deflate_warnings))
 chart = Chart(
     title=t("chart_main_title", per=per),
     x=curve["price"].to_numpy(),
@@ -434,7 +556,7 @@ chart = Chart(
             Series(t("chart_revenue"), curve["revenue"].to_numpy(), PALETTE["light"]["s2"]),
             Series(t("chart_total_cost"), curve["total_cost"].to_numpy(), PALETTE["light"]["s3"])],
     xlabel=t("axis_price", sym=sym),
-    vlines=[VLine(opt["price"], t("chart_optimal", price=money(opt["price"], sym)), PALETTE["light"]["s1"]),
+    vlines=[VLine(rec.price, t("chart_recommended", price=money(rec.price, sym)), PALETTE["light"]["s1"]),
             VLine(current_price, t("chart_current", price=money(current_price, sym)), PALETTE["light"]["muted"], dashed=True)],
     band=(price_range[0], price_range[1], t("chart_range")) if price_range else None,
 )
