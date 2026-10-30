@@ -439,25 +439,27 @@ def test_fit_reports_residual_sd():
 # ---------- price test plan ----------
 # Imported inside each test: pytest would otherwise collect optimizer.test_plan / TestPlan as tests.
 
-def plan_for(rec_price=50.0, noise=60.0, **kw):
+def plan_for(step=0.10, noise=60.0, unconstrained=50.0, rails=None, **kw):
     import optimizer
 
     m = fit_demand(synthetic_agg(), "linear")
-    p = params(m, **kw)
-    return m, p, optimizer.test_plan(m, p, rec_price, rec_price, noise, optimizer.Guardrails(max_change=0))
+    p = params(m, **kw)  # current price 45
+    rails = rails or optimizer.Guardrails(max_change=0)
+    return m, p, optimizer.test_plan(m, p, unconstrained, noise, rails, step)
 
 
 def test_plan_weeks_follow_power_formula():
     from optimizer import WEEKS_PER_MONTH, Z90, Z_POWER
 
-    m, p, plan = plan_for(rec_price=50.0, noise=60.0)
+    m, p, plan = plan_for(step=0.10, noise=60.0)
     weekly = lambda price: m.predict(price, 50.0) / WEEKS_PER_MONTH
-    assert plan.expected_test == pytest.approx(weekly(50.0)) and plan.expected_current == pytest.approx(weekly(45.0))
+    assert plan.test_price == 49.5
+    assert plan.expected_test == pytest.approx(weekly(49.5)) and plan.expected_current == pytest.approx(weekly(45.0))
     sd_week = 60.0 / np.sqrt(WEEKS_PER_MONTH)
     per_arm = np.ceil(2 * (Z90 + Z_POWER) ** 2 * sd_week ** 2 / plan.diff ** 2)
-    assert plan.weeks == max(4, 2 * per_arm)
+    assert plan.weeks_needed == 2 * per_arm and plan.weeks == max(4, 2 * per_arm)
     assert plan.schedule["arm"].tolist()[:3] == ["test", "current", "test"]
-    assert plan.schedule["price"].tolist()[:2] == [50.0, 45.0]
+    assert plan.schedule["price"].tolist()[:2] == [49.5, 45.0]
     row = plan.schedule.iloc[0]
     assert row["high"] - row["expected"] == pytest.approx(Z90 * sd_week)
 
@@ -470,15 +472,29 @@ def test_plan_clamps_weeks_and_warns_when_underpowered():
     assert [w.key for w in noisy.warnings] == ["warn_test_underpowered"]
 
 
-def test_small_recommended_move_tests_a_five_percent_step():
+def test_step_direction_rounding_and_guardrail_clip():
+    from optimizer import Guardrails
+
+    _, _, up = plan_for(step=0.05, unconstrained=48.0)
+    _, _, down = plan_for(step=0.05, unconstrained=40.0, rails=Guardrails(max_change=0, ending=".99"))
+    assert up.test_price == pytest.approx(47.25) and up.step == 0.05
+    assert down.test_price == 42.99 and down.step == -0.05  # 42.75 rounded to the nearest .99 ending
+    _, _, held = plan_for(step=0.20, rails=Guardrails(max_change=0.15))
+    assert held.test_price == pytest.approx(45 * 1.15) and held.clipped
+    assert "warn_test_step_clipped" in [w.key for w in held.warnings]
+
+
+def test_bigger_step_shortens_the_test():
     import optimizer
 
     m = fit_demand(synthetic_agg(), "linear")
-    p = params(m)  # current price 45
-    up = optimizer.test_plan(m, p, 45.2, 48.0, 60.0, optimizer.Guardrails(max_change=0))
-    down = optimizer.test_plan(m, p, 45.0, 40.0, 60.0, optimizer.Guardrails(max_change=0, ending=".99"))
-    assert up.test_price == pytest.approx(47.25)
-    assert down.test_price == 42.99  # 42.75 rounded to the nearest .99 ending
+    p = params(m)
+    curve = optimizer.step_tradeoff(m, p, 50.0, 60.0, optimizer.Guardrails(max_change=0))
+    assert curve["step"].tolist() == sorted(curve["step"])
+    assert curve["weeks_needed"].is_monotonic_decreasing and curve["weeks_needed"].iloc[0] > curve["weeks_needed"].iloc[-1]
+    # Linear demand: the weekly difference grows with the step, so weeks fall roughly with step²
+    small, large = curve.set_index("step").loc[[0.05, 0.10], "weeks_needed"]
+    assert small / large == pytest.approx(4, rel=0.25)
 
 
 def test_weekly_expectation_respects_capacity():
@@ -501,7 +517,7 @@ def test_evaluate_needs_two_weeks_per_arm():
 
 
 def test_verdict_codes():
-    _, _, plan = plan_for(rec_price=50.0, noise=20.0)  # test price above current: fewer units expected
+    _, _, plan = plan_for(step=0.10, noise=20.0)  # test price above current: fewer units expected
     assert verdict(plan).code == "consistent"
     assert verdict(plan, test_shift=-3 * abs(plan.diff)).code == "more_sensitive"
     assert verdict(plan, test_shift=+abs(plan.diff)).code == "less_sensitive"  # no drop at all

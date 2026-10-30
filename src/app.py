@@ -16,11 +16,12 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from config import BOOTSTRAP_SAMPLES, COUNTRY_MAP, DEFAULTS, MAX_CHANGE_DEFAULT, PERIOD_MULT, SEASONAL_MIN_MONTHS
+from config import (BOOTSTRAP_SAMPLES, COUNTRY_MAP, DEFAULTS, MAX_CHANGE_DEFAULT, PERIOD_MULT, SEASONAL_MIN_MONTHS,
+                    TEST_DEFAULT_STEP, TEST_MAX_WEEKS, TEST_STEP_CHOICES)
 from data_ingestion import PRODUCT, DataValidationError, aggregate, deflate, load_csv
 from macro_api import get_fx, get_inflation
 from optimizer import (ENDINGS, Guardrails, ScenarioParams, backtest, elasticities, evaluate_test, fit_demand,
-                       optimal_price_range, recommend, run_scenario, test_plan)
+                       optimal_price_range, recommend, run_scenario, step_tradeoff, test_plan)
 from report import Chart, Series, VLine, build_excel, build_pdf
 from translations import LANGUAGES, localize, translate
 
@@ -491,7 +492,36 @@ st.divider()
 st.subheader(t("test_header"))
 st.caption(t("test_caption"))
 # Conservative noise: the larger of the in-sample residual SD and the backtest's forecast error
-plan = test_plan(model, today_params, rec.price, unconstrained, max(model.resid_sd, bt.rmse if bt else 0.0), rails)
+noise_month = max(model.resid_sd, bt.rmse if bt else 0.0)
+tp1, tp2 = st.columns([1, 2])
+with tp1:
+    test_step = st.slider(t("test_step_label"), 1.0, 30.0, TEST_DEFAULT_STEP * 100, step=0.5, format="%.1f%%",
+                          help=t("test_step_help"), key="test_step")
+plan = test_plan(model, today_params, unconstrained, noise_month, rails, test_step / 100)
+tradeoff = step_tradeoff(model, today_params, unconstrained, noise_month, rails,
+                         TEST_STEP_CHOICES + (test_step / 100,))
+with tp1:
+    needed = plan.weeks_needed
+    st.metric(t("test_weeks_metric"), f"{needed:,.0f}" if np.isfinite(needed) else "∞",
+              help=t("test_weeks_help", max_weeks=TEST_MAX_WEEKS))
+    st.caption(t("test_noise_caption", sd=f"{plan.sd_week:,.0f}", diff=f"{abs(plan.diff):,.0f}", units=units))
+with tp2:
+    # Weeks fall roughly with the square of the step: a bigger step stands out from weekly noise sooner
+    shown = tradeoff[np.isfinite(tradeoff["weeks_needed"])]
+    fig = go.Figure(go.Bar(
+        x=[f"{s_ * 100:g}%" for s_ in shown["step"]], y=shown["weeks_needed"],
+        marker_color=[col["s1"] if abs(s_ - test_step / 100) < 1e-9 else
+                      (col["s3"] if w_ <= TEST_MAX_WEEKS else col["muted"])
+                      for s_, w_ in zip(shown["step"], shown["weeks_needed"])],
+        text=[f"{w_:,.0f}" for w_ in shown["weeks_needed"]], textposition="outside",
+        customdata=shown["test_price"], hovertemplate=f"{sym}%{{customdata:,.2f}}: %{{y:,.0f}}<extra></extra>"))
+    fig.add_hline(y=TEST_MAX_WEEKS, line=dict(color=col["muted"], width=1, dash="dash"),
+                  annotation_text=t("test_chart_max", weeks=TEST_MAX_WEEKS), annotation_position="top right")
+    style(fig, t("test_chart_title"), t("test_chart_x"), t("test_chart_y"), height=300)
+    fig.update_layout(showlegend=False, xaxis=dict(type="category"),
+                      yaxis=dict(type="log", title=t("test_chart_y")))
+    st.plotly_chart(fig, width="stretch")
+    st.caption(t("test_chart_caption"))
 st.markdown(t("test_summary", weeks=plan.weeks, half=plan.weeks // 2, test=money(plan.test_price, sym),
               current=money(current_price, sym), exp_test=f"{plan.expected_test:,.0f}",
               exp_current=f"{plan.expected_current:,.0f}", units=units))

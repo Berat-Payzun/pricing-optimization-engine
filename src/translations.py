@@ -652,6 +652,51 @@ STRINGS: dict[str, dict[str, str]] = {
         "de": "**{weeks} Wochen** durchführen: abwechselnd {half} zum Testpreis **{test}** und {half} zum aktuellen "
               "Preis **{current}**. Erwartet: etwa **{exp_test}** vs. **{exp_current}** {units} pro Woche.",
     },
+    "test_step_label": {"en": "Test price step (%)", "tr": "Test fiyat adımı (%)", "de": "Testpreis-Schritt (%)"},
+    "test_step_help": {
+        "en": "How far the test price is from the current price, in the direction the model says is more "
+              "profitable. A bigger step is easier to detect, so the test is shorter, but more sales are at stake "
+              "if the model is wrong. Changing it starts a new plan.",
+        "tr": "Test fiyatının mevcut fiyattan ne kadar uzak olduğu; modelin daha kârlı dediği yönde. Büyük bir adım "
+              "daha kolay fark edilir ve test kısalır, ancak model yanılıyorsa daha fazla satış riske girer. "
+              "Değiştirmek yeni bir plan başlatır.",
+        "de": "Wie weit der Testpreis vom aktuellen Preis entfernt ist, in die Richtung, die laut Modell "
+              "profitabler ist. Ein größerer Schritt ist leichter zu erkennen und verkürzt den Test, setzt aber "
+              "mehr Absatz aufs Spiel, falls das Modell irrt. Eine Änderung startet einen neuen Plan.",
+    },
+    "test_weeks_metric": {"en": "Weeks needed", "tr": "Gereken hafta", "de": "Benötigte Wochen"},
+    "test_weeks_help": {
+        "en": "Total weeks (both prices) to detect the expected sales difference with 80% power at 90% confidence, "
+              "given your sales' normal week-to-week variation. The plan is capped at {max_weeks} weeks.",
+        "tr": "Satışlarınızın olağan haftalık değişkenliği göz önüne alındığında, beklenen satış farkını %90 güvenle "
+              "ve %80 güçle saptamak için gereken toplam hafta (her iki fiyat). Plan en fazla {max_weeks} haftadır.",
+        "de": "Wochen insgesamt (beide Preise), um den erwarteten Absatzunterschied bei normaler wöchentlicher "
+              "Schwankung mit 80 % Trennschärfe und 90 % Konfidenz zu erkennen. Der Plan ist auf {max_weeks} "
+              "Wochen begrenzt.",
+    },
+    "test_noise_caption": {
+        "en": "Normal weekly swing ±{sd} {units}; expected difference between the prices {diff} {units} per week.",
+        "tr": "Olağan haftalık dalgalanma ±{sd} {units}; fiyatlar arasındaki beklenen fark haftada {diff} {units}.",
+        "de": "Normale Wochenschwankung ±{sd} {units}; erwarteter Unterschied zwischen den Preisen {diff} {units} "
+              "pro Woche.",
+    },
+    "test_chart_title": {
+        "en": "Bigger step, shorter test",
+        "tr": "Daha büyük adım, daha kısa test",
+        "de": "Größerer Schritt, kürzerer Test",
+    },
+    "test_chart_x": {"en": "Test price step", "tr": "Test fiyat adımı", "de": "Testpreis-Schritt"},
+    "test_chart_y": {"en": "Weeks needed (log scale)", "tr": "Gereken hafta (log ölçek)", "de": "Benötigte Wochen (log. Skala)"},
+    "test_chart_max": {"en": "max {weeks} weeks", "tr": "en fazla {weeks} hafta", "de": "max. {weeks} Wochen"},
+    "test_chart_caption": {
+        "en": "The sales difference grows with the step while weekly noise stays the same, so the weeks needed "
+              "fall roughly with the square of the step: doubling the step cuts the test to about a quarter.",
+        "tr": "Satış farkı adımla birlikte büyürken haftalık gürültü aynı kalır; bu yüzden gereken hafta sayısı "
+              "kabaca adımın karesiyle azalır: adımı iki katına çıkarmak testi yaklaşık dörtte birine indirir.",
+        "de": "Der Absatzunterschied wächst mit dem Schritt, das Wochenrauschen bleibt gleich. Die benötigten "
+              "Wochen sinken daher etwa mit dem Quadrat des Schritts: Ein doppelter Schritt verkürzt den Test auf "
+              "etwa ein Viertel.",
+    },
     "col_week": {"en": "Week", "tr": "Hafta", "de": "Woche"},
     "col_arm": {"en": "Price group", "tr": "Fiyat grubu", "de": "Preisgruppe"},
     "col_expected": {"en": "Expected units", "tr": "Beklenen adet", "de": "Erwartete Stück"},
@@ -903,6 +948,14 @@ STRINGS: dict[str, dict[str, str]] = {
         "de": "Selbst {weeks} Wochen reichen womöglich nicht, um die beiden Preise sicher zu unterscheiden: Der "
               "erwartete Absatzunterschied ist klein im Vergleich zu normalen Wochenschwankungen. Erwägen Sie "
               "einen größeren Preisschritt.",
+    },
+    "warn_test_step_clipped": {
+        "en": "A {step:.1f}% step goes beyond your guardrails, so the test price is held at {price:,.2f}. Widen "
+              "'Max change' or the floor/ceiling to test a bigger step.",
+        "tr": "%{step:.1f} adım fiyat kurallarınızın dışına çıkıyor; test fiyatı {price:,.2f} olarak sınırlandı. "
+              "Daha büyük bir adımı test etmek için 'En fazla değişim' veya taban/tavan fiyatı genişletin.",
+        "de": "Ein Schritt von {step:.1f} % überschreitet Ihre Preisregeln, daher bleibt der Testpreis bei "
+              "{price:,.2f}. Erweitern Sie „Max. Änderung“ oder Unter-/Obergrenze, um einen größeren Schritt zu testen.",
     },
     "warn_guardrail_conflict": {
         "en": "The price floor/ceiling lies outside the allowed step from the current price: the max-change "

@@ -26,7 +26,7 @@ import pandas as pd
 from sklearn.linear_model import LinearRegression
 
 from config import (BACKTEST_MIN_MONTHS, BACKTEST_MONTHS, BOOTSTRAP_SAMPLES, PERIOD_MULT, PRICE_GRID_POINTS,
-                    SEASONAL_MIN_MONTHS, TEST_FALLBACK_STEP, TEST_MAX_WEEKS, TEST_MIN_STEP, TEST_MIN_WEEKS)
+                    SEASONAL_MIN_MONTHS, TEST_DEFAULT_STEP, TEST_MAX_WEEKS, TEST_MIN_WEEKS, TEST_STEP_CHOICES)
 from translations import Msg
 
 
@@ -513,7 +513,10 @@ Z_POWER = 0.8416  # 80% power
 class TestPlan:
     current_price: float
     test_price: float
-    weeks: int  # total, half at each price
+    step: float  # signed fraction requested: + tests a higher price, − a lower one
+    weeks: int  # total, half at each price, clamped to TEST_MIN_WEEKS..TEST_MAX_WEEKS
+    weeks_needed: float  # unclamped total for 80% power (inf when no difference is expected)
+    clipped: bool  # the guardrails held the test price closer to the current price than `step`
     expected_current: float  # weekly units
     expected_test: float
     sd_week: float
@@ -526,27 +529,36 @@ class TestPlan:
         return self.expected_test - self.expected_current
 
 
-def _test_price(p: ScenarioParams, rec_price: float, unconstrained: float, rails: Guardrails) -> float:
+def _test_price(p: ScenarioParams, step: float, rails: Guardrails) -> tuple[float, bool]:
+    """current × (1 + step), kept inside the guardrail band and rounded to the price ending."""
     current = p.current_price
-    if abs(rec_price / current - 1) >= TEST_MIN_STEP:
-        return rec_price
-    # The recommendation barely moves: still test a step towards the optimum, to learn the slope
-    step = TEST_FALLBACK_STEP if unconstrained >= current else -TEST_FALLBACK_STEP
     low, high = _bounds(rails, current)
-    target = float(np.clip(current * (1 + step), low, high))
-    if rails.ending == "none":
-        return round(target, 2)
-    candidates = [c for c in _with_ending(target, rails.ending) if low <= c <= high and c > 0]
-    return min(candidates, key=lambda c: abs(c - target)) if candidates else round(target, 2)
+    wanted = current * (1 + step)
+    target = float(np.clip(wanted, low, high))
+    clipped = abs(target - wanted) > 1e-9
+    if rails.ending != "none":
+        candidates = [c for c in _with_ending(target, rails.ending) if low <= c <= high and c > 0]
+        if candidates:
+            return min(candidates, key=lambda c: abs(c - target)), clipped
+    return round(target, 2), clipped
 
 
-def test_plan(model: DemandModel, p: ScenarioParams, rec_price: float, unconstrained: float,
-              noise_sd_month: float, rails: Guardrails) -> TestPlan:
-    """Alternating-weeks price test: test price in odd weeks, current price in even weeks, so
-    season and trend hit both arms alike. The length gives 80% power to detect the predicted
-    difference at 90% confidence, from the model's monthly noise."""
+def weeks_needed(diff: float, sd_week: float) -> float:
+    """Total weeks (both prices) for 80% power to detect a weekly difference `diff` at 90% confidence."""
+    if diff == 0:
+        return float("inf")
+    return 2 * float(np.ceil(2 * (Z90 + Z_POWER) ** 2 * sd_week ** 2 / diff ** 2))
+
+
+def test_plan(model: DemandModel, p: ScenarioParams, unconstrained: float, noise_sd_month: float,
+              rails: Guardrails, step: float = TEST_DEFAULT_STEP) -> TestPlan:
+    """Alternating-weeks price test: the test price (a `step` away from the current price, towards
+    the unconstrained optimum) in odd weeks, the current price in even weeks, so season and trend hit
+    both alike. The length gives 80% power to detect the predicted difference at 90% confidence,
+    from the model's monthly noise. A bigger step means a bigger difference and a shorter test."""
     s = _setup(model.has_comp, p)
-    test_price = _test_price(p, rec_price, unconstrained, rails)
+    signed = step if unconstrained >= p.current_price else -step
+    test_price, clipped = _test_price(p, signed, rails)
     weekly_cap = p.capacity / PERIOD_MULT[p.period] / WEEKS_PER_MONTH
 
     def weekly(price: float) -> float:  # average month, today's money
@@ -554,10 +566,12 @@ def test_plan(model: DemandModel, p: ScenarioParams, rec_price: float, unconstra
 
     exp_cur, exp_test = weekly(p.current_price), weekly(test_price)
     sd_week = noise_sd_month / np.sqrt(WEEKS_PER_MONTH)
-    diff, warnings = abs(exp_test - exp_cur), []
-    per_arm = np.ceil(2 * (Z90 + Z_POWER) ** 2 * sd_week ** 2 / diff ** 2) if diff > 0 else np.inf
-    weeks = int(np.clip(2 * per_arm, TEST_MIN_WEEKS, TEST_MAX_WEEKS))
-    if 2 * per_arm > TEST_MAX_WEEKS:
+    needed = weeks_needed(exp_test - exp_cur, sd_week)
+    weeks = int(np.clip(needed, TEST_MIN_WEEKS, TEST_MAX_WEEKS))
+    warnings = []
+    if clipped:
+        warnings.append(Msg("warn_test_step_clipped", step=step * 100, price=test_price))
+    if needed > TEST_MAX_WEEKS:
         warnings.append(Msg("warn_test_underpowered", weeks=TEST_MAX_WEEKS))
 
     arms = np.where(np.arange(weeks) % 2 == 0, "test", "current")
@@ -570,7 +584,19 @@ def test_plan(model: DemandModel, p: ScenarioParams, rec_price: float, unconstra
         "low": np.maximum(expected - Z90 * sd_week, 0.0),
         "high": expected + Z90 * sd_week,
     })
-    return TestPlan(p.current_price, test_price, weeks, exp_cur, exp_test, float(sd_week), schedule, warnings)
+    return TestPlan(p.current_price, test_price, signed, weeks, needed, clipped, exp_cur, exp_test, float(sd_week),
+                    schedule, warnings)
+
+
+def step_tradeoff(model: DemandModel, p: ScenarioParams, unconstrained: float, noise_sd_month: float,
+                  rails: Guardrails, steps=TEST_STEP_CHOICES) -> pd.DataFrame:
+    """Required test length for a range of step sizes: weeks fall roughly with the square of the step."""
+    rows = []
+    for step in sorted(set(steps)):
+        plan = test_plan(model, p, unconstrained, noise_sd_month, rails, step)
+        rows.append({"step": step, "test_price": plan.test_price, "diff": plan.diff,
+                     "weeks_needed": plan.weeks_needed, "clipped": plan.clipped})
+    return pd.DataFrame(rows)
 
 
 @dataclass
