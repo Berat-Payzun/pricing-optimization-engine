@@ -224,3 +224,303 @@ def test_bootstrap_matches_full_refit_path():
             pass
     fast = optimal_price_range(agg, "linear", p, seasonal=True, n=60, seed=7)
     assert fast == pytest.approx(tuple(np.percentile(slow, [5, 95])), rel=1e-6)
+
+
+# ---------- fees, VAT and extra unit costs ----------
+
+def analytic_optimum(m, cogs, k=1.0):
+    """Linear demand with per-unit net price k·P − cogs: P* = (a/(−b) + cogs/k) / 2."""
+    a_eff = m.intercept + m.c * 50.0
+    return (a_eff / -m.b + cogs / k) / 2
+
+
+@pytest.mark.parametrize("fees", [dict(commission=0.2), dict(vat=0.2), dict(vat=0.2, commission=0.15, payment_fee=0.02)])
+def test_fees_and_vat_match_analytic_optimum(fees):
+    m = fit_demand(synthetic_agg(), "linear")
+    p = params(m, **fees)
+    r = run_scenario(m, p)
+    k = 1 / (1 + p.vat) - p.fee_rate
+    step = r.curve["price"].iloc[1] - r.curve["price"].iloc[0]
+    assert r.optimal["price"] == pytest.approx(analytic_optimum(m, 20.0, k), abs=step)
+    assert r.optimal["price"] > run_scenario(m, params(m)).optimal["price"]
+
+
+def test_vat_and_fees_come_off_profit():
+    m = fit_demand(synthetic_agg(), "linear")
+    plain = run_scenario(m, params(m)).baseline
+    taxed = run_scenario(m, params(m, vat=0.2, commission=0.1)).baseline
+    assert taxed["revenue"] == pytest.approx(plain["revenue"] / 1.2)
+    assert taxed["fees"] == pytest.approx(0.1 * 45.0 * plain["q_sold"])
+    assert taxed["profit"] == pytest.approx(plain["profit"] - taxed["vat"] - taxed["fees"])
+    assert taxed["margin_pct"] == pytest.approx((45 / 1.2 - 4.5 - 20) / (45 / 1.2))
+
+
+def test_extra_unit_cost_inflates_with_local_inflation():
+    p = ScenarioParams(base_cogs=10.0, fixed_monthly=0, capacity=1e9, import_share=0.0, inflation=0.1,
+                       extra_unit_cost=2.0)
+    assert shocked_costs(p)[0] == pytest.approx(10 * 1.1 + 2 * 1.1)
+    m = fit_demand(synthetic_agg(), "linear")
+    assert run_scenario(m, params(m, extra_unit_cost=5)).optimal["price"] > run_scenario(m, params(m)).optimal["price"]
+
+
+def test_bootstrap_range_brackets_optimum_with_fees():
+    from optimizer import optimal_price_range
+
+    agg = synthetic_agg(noise=0.05)
+    m = fit_demand(agg, "linear")
+    p = params(m, commission=0.2, vat=0.2)
+    low, high = optimal_price_range(agg, "linear", p, seed=3)
+    assert low < run_scenario(m, p).optimal["price"] < high
+
+
+# ---------- guardrails ----------
+
+def guarded(rails, **kw):
+    from optimizer import recommend
+
+    m = fit_demand(synthetic_agg(), "linear")
+    p = params(m, **kw)
+    r = run_scenario(m, p)
+    return r, recommend(m, p, r, rails)
+
+
+def test_guardrails_off_return_the_optimum():
+    from optimizer import Guardrails
+
+    r, rec = guarded(Guardrails(max_change=0))
+    assert rec.price == r.optimal["price"] and rec.binding == [] and rec.warnings == []
+
+
+def test_max_change_clamps_the_step():
+    from optimizer import Guardrails
+
+    r, rec = guarded(Guardrails(max_change=0.05), current_price=30.0)  # optimum ≈ 42, far above +5%
+    step = r.curve["price"].iloc[1] - r.curve["price"].iloc[0]
+    assert rec.price == pytest.approx(31.5, abs=step)
+    assert rec.price <= 31.5
+    assert rec.binding == ["max_change"]
+    assert rec.row["profit"] < r.optimal["profit"]
+
+
+def test_floor_and_ceiling():
+    from optimizer import Guardrails
+
+    _, high = guarded(Guardrails(max_change=0, floor=50.0))
+    assert high.price == 50.0 and high.binding == ["floor"]  # exactly the floor, not the next grid point
+    _, low = guarded(Guardrails(max_change=0, ceiling=35.0))
+    assert low.price == 35.0 and low.binding == ["ceiling"]
+
+
+def test_min_margin_is_respected():
+    from optimizer import Guardrails
+
+    r, rec = guarded(Guardrails(max_change=0, min_margin=0.6))
+    assert r.optimal["margin_pct"] < 0.6
+    assert rec.row["margin_pct"] >= 0.6 - 1e-9
+    assert "min_margin" in rec.binding
+
+
+def test_unreachable_margin_falls_back_to_band_with_warning():
+    from optimizer import Guardrails
+
+    _, rec = guarded(Guardrails(max_change=0.05, min_margin=0.9))
+    assert 45 * 0.95 - 1e-9 <= rec.price <= 45 * 1.05 + 1e-9
+    assert [w.key for w in rec.warnings] == ["warn_guardrail_margin"]
+    assert "min_margin" not in rec.binding  # dropped, so it isn't what limits the price
+
+
+def test_floor_outside_step_band_warns():
+    from optimizer import Guardrails
+
+    _, rec = guarded(Guardrails(max_change=0.05, floor=60.0))
+    assert rec.price >= 60.0
+    assert [w.key for w in rec.warnings] == ["warn_guardrail_conflict"]
+
+
+@pytest.mark.parametrize("ending,cents", [(".99", 99), (".90", 90), ("whole", 0)])
+def test_price_endings(ending, cents):
+    from optimizer import Guardrails
+
+    r, rec = guarded(Guardrails(max_change=0, ending=ending))
+    assert round(rec.price * 100) % 100 == cents
+    assert abs(rec.price - r.optimal["price"]) < 1.0
+    assert rec.row["profit"] == pytest.approx(
+        run_scenario(fit_demand(synthetic_agg(), "linear"), params(None, current_price=rec.price)).baseline["profit"])
+
+
+# ---------- stockout / promo flags ----------
+
+def stockout_daily(flag: bool, seed=1):
+    """Daily sales over 24 months with true demand Q/day = 120 − 2P. In cheap (busy) months stock runs
+    out at 35 units/day, so recorded sales understate demand; with `flag`, those days are marked."""
+    from data_ingestion import aggregate
+
+    rng = np.random.default_rng(seed)
+    dates = pd.date_range("2024-01-01", "2025-12-31", freq="D")
+    month_price = {m: rng.uniform(30, 55) for m in dates.to_period("M").unique()}
+    price = np.array([month_price[m] for m in dates.to_period("M")])
+    demand = 120 - 2 * price + rng.normal(0, 3, len(dates))
+    sold = np.minimum(demand, 35)
+    df = pd.DataFrame({"Date": dates, "Price_Charged": price, "Quantity_Sold": sold, "Cost_Per_Unit": 20.0,
+                       "Flag": np.where(flag & (demand > 35), "stockout", "")})
+    return aggregate(df)[0]
+
+
+def test_stockouts_bias_slope_unless_flagged():
+    true_monthly_slope = -2 * 30.4
+    unflagged = fit_demand(stockout_daily(flag=False), "linear")
+    flagged = fit_demand(stockout_daily(flag=True), "linear")
+    assert unflagged.b > true_monthly_slope * 0.6  # biased toward zero: looks price-insensitive
+    assert flagged.b == pytest.approx(true_monthly_slope, rel=0.15)
+
+
+def test_excluded_months_are_skipped_by_fit_and_bootstrap():
+    from optimizer import optimal_price_range
+
+    clean = synthetic_agg(noise=0.05)
+    dirty = pd.concat([clean, clean.iloc[:4].set_axis(pd.date_range("2027-01-01", periods=4, freq="MS"))
+                       .assign(Quantity_Sold=0.0)])
+    dirty["Excluded"] = [False] * len(clean) + [True] * 4
+    m_clean, m_dirty = fit_demand(clean, "linear"), fit_demand(dirty, "linear")
+    assert (m_dirty.b, m_dirty.n) == (pytest.approx(m_clean.b), m_clean.n)
+    p = params(m_clean)
+    assert optimal_price_range(dirty, "linear", p, seed=1) == optimal_price_range(clean, "linear", p, seed=1)
+
+
+# ---------- rolling backtest ----------
+
+def test_backtest_on_noiseless_data_is_exact_and_beats_naive():
+    from optimizer import backtest
+
+    bt = backtest(synthetic_agg(), "linear")
+    assert len(bt.months) == 6 and bt.months[-1] == synthetic_agg().index[-1]
+    assert bt.wape == pytest.approx(0, abs=1e-9)
+    assert bt.naive_wape > 0.05 and bt.beats_naive
+    assert bt.naive.tolist() == synthetic_agg()["Quantity_Sold"].iloc[-7:-1].tolist()
+
+
+def test_backtest_never_trains_on_the_month_it_forecasts(monkeypatch):
+    import optimizer
+
+    seen = []
+    real_fit = optimizer.fit_demand
+    monkeypatch.setattr(optimizer, "fit_demand", lambda agg, *a, **k: seen.append(agg.index.max()) or real_fit(agg, *a, **k))
+    agg = synthetic_agg(noise=0.05)
+    bt = optimizer.backtest(agg, "linear")
+    assert seen == list(agg.index[-7:-1])  # each fit ends the month before its forecast
+    assert bt.wape > 0
+
+
+def test_backtest_shrinks_horizon_then_gives_up():
+    from optimizer import backtest
+
+    # Linear with competitor needs 4 training months: 8 months leave room for 4 forecasts,
+    # 6 months for only 2, below the 3-month minimum
+    assert len(backtest(synthetic_agg(n=8), "linear").months) == 4
+    assert backtest(synthetic_agg(n=6), "linear") is None
+
+
+def test_backtest_skips_excluded_months():
+    from optimizer import backtest
+
+    agg = synthetic_agg(noise=0.05)
+    agg["Excluded"] = False
+    agg.iloc[-2, agg.columns.get_loc("Excluded")] = True
+    bt = backtest(agg, "linear")
+    assert agg.index[-2] not in bt.months and len(bt.months) == 6
+
+
+def test_fit_reports_residual_sd():
+    noiseless, noisy = fit_demand(synthetic_agg(), "linear"), fit_demand(synthetic_agg(noise=0.05), "linear")
+    assert noiseless.resid_sd == pytest.approx(0, abs=1e-6)
+    assert noisy.resid_sd > 10
+
+
+# ---------- price test plan ----------
+# Imported inside each test: pytest would otherwise collect optimizer.test_plan / TestPlan as tests.
+
+def plan_for(step=0.10, noise=60.0, unconstrained=50.0, rails=None, **kw):
+    import optimizer
+
+    m = fit_demand(synthetic_agg(), "linear")
+    p = params(m, **kw)  # current price 45
+    rails = rails or optimizer.Guardrails(max_change=0)
+    return m, p, optimizer.test_plan(m, p, unconstrained, noise, rails, step)
+
+
+def test_plan_weeks_follow_power_formula():
+    from optimizer import WEEKS_PER_MONTH, Z90, Z_POWER
+
+    m, p, plan = plan_for(step=0.10, noise=60.0)
+    weekly = lambda price: m.predict(price, 50.0) / WEEKS_PER_MONTH
+    assert plan.test_price == 49.5
+    assert plan.expected_test == pytest.approx(weekly(49.5)) and plan.expected_current == pytest.approx(weekly(45.0))
+    sd_week = 60.0 / np.sqrt(WEEKS_PER_MONTH)
+    per_arm = np.ceil(2 * (Z90 + Z_POWER) ** 2 * sd_week ** 2 / plan.diff ** 2)
+    assert plan.weeks_needed == 2 * per_arm and plan.weeks == max(4, 2 * per_arm)
+    assert plan.schedule["arm"].tolist()[:3] == ["test", "current", "test"]
+    assert plan.schedule["price"].tolist()[:2] == [49.5, 45.0]
+    row = plan.schedule.iloc[0]
+    assert row["high"] - row["expected"] == pytest.approx(Z90 * sd_week)
+
+
+def test_plan_clamps_weeks_and_warns_when_underpowered():
+    _, _, quiet = plan_for(noise=1.0)
+    assert quiet.weeks == 4 and quiet.warnings == []
+    _, _, noisy = plan_for(noise=5000.0)
+    assert noisy.weeks == 24
+    assert [w.key for w in noisy.warnings] == ["warn_test_underpowered"]
+
+
+def test_step_direction_rounding_and_guardrail_clip():
+    from optimizer import Guardrails
+
+    _, _, up = plan_for(step=0.05, unconstrained=48.0)
+    _, _, down = plan_for(step=0.05, unconstrained=40.0, rails=Guardrails(max_change=0, ending=".99"))
+    assert up.test_price == pytest.approx(47.25) and up.step == 0.05
+    assert down.test_price == 42.99 and down.step == -0.05  # 42.75 rounded to the nearest .99 ending
+    _, _, held = plan_for(step=0.20, rails=Guardrails(max_change=0.15))
+    assert held.test_price == pytest.approx(45 * 1.15) and held.clipped
+    assert "warn_test_step_clipped" in [w.key for w in held.warnings]
+
+
+def test_bigger_step_shortens_the_test():
+    import optimizer
+
+    m = fit_demand(synthetic_agg(), "linear")
+    p = params(m)
+    curve = optimizer.step_tradeoff(m, p, 50.0, 60.0, optimizer.Guardrails(max_change=0))
+    assert curve["step"].tolist() == sorted(curve["step"])
+    assert curve["weeks_needed"].is_monotonic_decreasing and curve["weeks_needed"].iloc[0] > curve["weeks_needed"].iloc[-1]
+    # Linear demand: the weekly difference grows with the step, so weeks fall roughly with step²
+    small, large = curve.set_index("step").loc[[0.05, 0.10], "weeks_needed"]
+    assert small / large == pytest.approx(4, rel=0.25)
+
+
+def test_weekly_expectation_respects_capacity():
+    _, _, plan = plan_for(capacity=1000.0)  # monthly capacity → ~230 per week
+    assert plan.expected_current == pytest.approx(1000.0 * 12 / 52)
+
+
+def verdict(plan, test_shift=0.0, both_shift=0.0, weeks=None):
+    from optimizer import evaluate_test
+
+    s = plan.schedule.head(weeks) if weeks else plan.schedule
+    actual = s["expected"] + both_shift + np.where(s["arm"] == "test", test_shift, 0.0)
+    return evaluate_test(plan, list(actual) + [None] * (plan.weeks - len(s)))
+
+
+def test_evaluate_needs_two_weeks_per_arm():
+    _, _, plan = plan_for()
+    assert verdict(plan, weeks=3) is None
+    assert verdict(plan, weeks=4) is not None
+
+
+def test_verdict_codes():
+    _, _, plan = plan_for(step=0.10, noise=20.0)  # test price above current: fewer units expected
+    assert verdict(plan).code == "consistent"
+    assert verdict(plan, test_shift=-3 * abs(plan.diff)).code == "more_sensitive"
+    assert verdict(plan, test_shift=+abs(plan.diff)).code == "less_sensitive"  # no drop at all
+    v = verdict(plan, both_shift=0.3 * plan.expected_current)  # season shift hits both arms
+    assert v.code == "consistent" and v.level_ratio > 1.2
+    assert verdict(plan).elasticity_observed == pytest.approx(verdict(plan).elasticity_model)

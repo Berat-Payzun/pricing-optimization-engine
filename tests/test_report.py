@@ -22,3 +22,21 @@ def test_pdf_renders_turkish_text_and_lira_sign():
     pdf = build_pdf("Fiyat Optimizasyon Motoru", "Şubat · ığüşöç İ", [("Optimum fiyat", "₺50,00")], chart,
                     "Notlar", ["Uyarı: talep eğrisi dışa doğru tahmin ediliyor."], "2026-10-26")
     assert pdf.startswith(b"%PDF") and len(pdf) > 5000
+
+
+def test_excel_stores_formula_like_text_as_text():
+    from openpyxl import load_workbook
+
+    payload = '=HYPERLINK("http://example.com","click")'
+    xlsx = build_excel({"Data": pd.DataFrame({"Product": [payload, "-5", "@SUM(A1)"], "Units": [1, 2, 3]})})
+    ws = load_workbook(io.BytesIO(xlsx))["Data"]
+    assert ws["A2"].data_type == "s" and ws["A2"].value == payload
+    assert [ws[f"A{i}"].data_type for i in (3, 4)] == ["s", "s"]
+    assert ws["B2"].value == 1
+
+
+def test_pdf_with_long_summary_moves_chart_to_next_page():
+    x = np.linspace(10, 100, 50)
+    chart = Chart("Profit", x, [Series("Net profit", -(x - 50) ** 2 + 900, "#2a78d6")])
+    pdf = build_pdf("Title", "Subtitle", [(f"Row {i}", "value") for i in range(40)], chart)
+    assert pdf.count(b"/Type /Page") - pdf.count(b"/Type /Pages") == 2

@@ -19,13 +19,19 @@ FONT_DIR = Path(__file__).resolve().parents[1] / "assets" / "fonts"
 
 
 def build_excel(sheets: dict[str, pd.DataFrame]) -> bytes:
-    """One sheet per frame, in order, with readable column widths."""
+    """One sheet per frame, in order, with readable column widths. Every cell is a value:
+    text that starts with "=" (e.g. a product name from an uploaded file) is stored as text,
+    never as a formula Excel would run."""
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         for name, frame in sheets.items():
             sheet = name[:31]  # Excel's limit
             frame.to_excel(writer, sheet_name=sheet, index=False)
             ws = writer.sheets[sheet]
+            for row in ws.iter_rows():
+                for cell in row:
+                    if cell.data_type == "f":
+                        cell.data_type = "s"
             for i, col in enumerate(frame.columns, start=1):
                 width = max([len(str(col))] + [len(str(v)) for v in frame[col].head(200)])
                 ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = min(max(width + 2, 10), 60)
@@ -189,6 +195,8 @@ def build_pdf(title: str, subtitle: str, summary: list[tuple[str, str]], chart: 
         pdf.set_font("DejaVu", "", 9)
 
     pdf.ln(4)
+    if pdf.get_y() + 95 > pdf.h - pdf.b_margin:  # the chart is drawn by hand, so page breaks are too
+        pdf.add_page()
     _draw_chart(pdf, chart, pdf.l_margin, pdf.get_y(), pdf.epw, 95)
     pdf.set_y(pdf.get_y() + 95 + 4)
 

@@ -15,6 +15,7 @@ from translations import Msg
 REQUIRED = ["Date", "Price_Charged", "Quantity_Sold"]
 OPTIONAL = ["Cost_Per_Unit", "Competitor_Price"]
 PRODUCT = "Product"  # optional text column: one file may hold several products
+FLAG = "Flag"  # optional text column marking stockout / promo rows, left out of the demand fit
 
 # Header aliases in English, Turkish and German, written in folded form (see fold_header)
 ALIASES = {
@@ -27,8 +28,20 @@ ALIASES = {
     "Competitor_Price": ["competitor_price", "competitor", "rakip", "rakip_fiyat", "rakip_fiyati",
                          "konkurrenzpreis", "konkurrenz", "wettbewerbspreis"],
     PRODUCT: ["product", "sku", "item", "urun", "urun_adi", "urun_kodu", "produkt", "artikel", "artikelnummer"],
+    FLAG: ["flag", "flags", "status", "note", "durum", "etiket", "isaret", "kennzeichen", "hinweis", "markierung"],
 }
 ALIAS_LOOKUP = {alias: target for target, aliases in ALIASES.items() for alias in aliases}
+
+# Flag values in English, Turkish and German (folded form), mapped to "stockout" or "promo"
+FLAG_VALUES = {
+    "stockout": ["stockout", "stock_out", "out_of_stock", "oos", "stok_yok", "stokta_yok", "tukendi",
+                 "ausverkauft", "nicht_vorratig", "nicht_vorraetig", "fehlbestand"],
+    "promo": ["promo", "promotion", "sale", "discount", "campaign", "kampanya", "indirim",
+              "aktion", "rabatt", "angebot"],
+}
+FLAG_LOOKUP = {alias: flag for flag, aliases in FLAG_VALUES.items() for alias in aliases}
+# A month with more than this share of flagged days is left out of the fit entirely
+FLAG_EXCLUDE_SHARE = 0.5
 
 
 class DataValidationError(ValueError):
@@ -107,8 +120,11 @@ def to_dates(values: pd.Series) -> pd.Series:
     return pd.to_datetime(s, errors="coerce", dayfirst=dayfirst)
 
 
-def load_csv(source, default_cogs: float) -> tuple[pd.DataFrame, list[str]]:
-    """Read and clean raw sales rows from a CSV or .xlsx file. Returns (clean_df, warnings)."""
+def load_csv(source, default_cogs: float, drop_duplicates: bool = True) -> tuple[pd.DataFrame, list[str]]:
+    """Read and clean raw sales rows from a CSV or .xlsx file. Returns (clean_df, warnings).
+
+    Exact duplicate rows usually come from combining overlapping exports and would double
+    the sales; `drop_duplicates=False` keeps them for transaction logs where they can be real."""
     warnings: list[str] = []
     raw, decimal_comma = read_table(source)
     df = normalize_columns(raw)
@@ -117,12 +133,18 @@ def load_csv(source, default_cogs: float) -> tuple[pd.DataFrame, list[str]]:
     if missing:
         raise DataValidationError(Msg("err_missing_cols", cols=", ".join(missing)))
 
-    df = df[[c for c in REQUIRED + OPTIONAL + [PRODUCT] if c in df.columns]].copy()
+    df = df[[c for c in REQUIRED + OPTIONAL + [PRODUCT, FLAG] if c in df.columns]].copy()
     df["Date"] = to_dates(df["Date"])
-    for col in df.columns.drop(["Date", PRODUCT], errors="ignore"):
+    for col in df.columns.drop(["Date", PRODUCT, FLAG], errors="ignore"):
         df[col] = to_number(df[col], decimal_comma)
     if PRODUCT in df.columns:
         df[PRODUCT] = df[PRODUCT].fillna("").astype(str).str.strip().replace("", "—")
+    if FLAG in df.columns:
+        folded = df[FLAG].fillna("").map(fold_header)
+        unknown = sorted(set(folded[(folded != "") & ~folded.isin(list(FLAG_LOOKUP))]))
+        if unknown:
+            warnings.append(Msg("warn_flag_unknown", values=", ".join(unknown[:5])))
+        df[FLAG] = folded.map(FLAG_LOOKUP).fillna("")  # unknown values count as clean
 
     n_raw = len(df)
     df = df.dropna(subset=REQUIRED)
@@ -132,6 +154,13 @@ def load_csv(source, default_cogs: float) -> tuple[pd.DataFrame, list[str]]:
         warnings.append(Msg("warn_rows_dropped", dropped=dropped, n_raw=n_raw))
     if df.empty:
         raise DataValidationError(Msg("err_no_valid_rows"))
+
+    n_dup = int(df.duplicated().sum())
+    if n_dup and drop_duplicates:
+        df = df.drop_duplicates()
+        warnings.append(Msg("warn_duplicates_dropped", n=n_dup))
+    elif n_dup:
+        warnings.append(Msg("warn_duplicates_kept", n=n_dup))
 
     df = df.sort_values("Date").reset_index(drop=True)
 
@@ -158,15 +187,10 @@ def load_csv(source, default_cogs: float) -> tuple[pd.DataFrame, list[str]]:
     return df, warnings
 
 
-def aggregate(df: pd.DataFrame, freq: str = "MS") -> tuple[pd.DataFrame, list[str]]:
-    """Aggregate raw rows to calendar months to smooth out daily/weekly noise.
-
-    Price is quantity-weighted (what customers actually paid on average);
-    falls back to a simple mean for periods with zero sales.
-    """
-    warnings: list[str] = []
+def _monthly(df: pd.DataFrame, freq: str) -> pd.DataFrame:
+    """Price is quantity-weighted (what customers actually paid on average);
+    falls back to a simple mean for periods with zero sales."""
     g = df.assign(Revenue=df["Price_Charged"] * df["Quantity_Sold"]).set_index("Date").groupby(pd.Grouper(freq=freq))
-
     out = pd.DataFrame({"Quantity_Sold": g["Quantity_Sold"].sum()})
     out["Price_Charged"] = (g["Revenue"].sum() / out["Quantity_Sold"]).where(
         out["Quantity_Sold"] > 0, g["Price_Charged"].mean()
@@ -174,16 +198,55 @@ def aggregate(df: pd.DataFrame, freq: str = "MS") -> tuple[pd.DataFrame, list[st
     out["Cost_Per_Unit"] = g["Cost_Per_Unit"].mean()
     if "Competitor_Price" in df.columns:
         out["Competitor_Price"] = g["Competitor_Price"].mean()
+    return out
 
-    out = out.dropna(subset=["Price_Charged"])  # months with no rows at all
+
+def _days(df: pd.DataFrame, freq: str) -> pd.Series:
+    """Distinct calendar days with rows, per month (so transaction-level files count days, not rows)."""
+    return df.assign(Day=df["Date"].dt.normalize()).set_index("Date").groupby(pd.Grouper(freq=freq))["Day"].nunique()
+
+
+def aggregate(df: pd.DataFrame, freq: str = "MS") -> tuple[pd.DataFrame, list[str]]:
+    """Aggregate raw rows to calendar months to smooth out daily/weekly noise.
+
+    With a Flag column, days with a stockout or promo row are left out: sales from a month's
+    clean days are scaled up to all its days, and a month that is mostly flagged is kept for
+    the charts but marked Excluded from the demand fit.
+    """
+    warnings: list[str] = []
+    out = _monthly(df, freq).dropna(subset=["Price_Charged"])  # months with no rows at all
     out.index.name = "Date"
 
-    n = len(out)
+    flagged = df[FLAG] != "" if FLAG in df.columns else pd.Series(False, index=df.index)
+    if flagged.any():
+        day = df["Date"].dt.normalize()
+        clean_rows = ~day.isin(day[flagged])
+        n_days = _days(df, freq).reindex(out.index)
+        clean_days = _days(df[clean_rows], freq).reindex(out.index).fillna(0)
+        share = 1 - clean_days / n_days
+        excluded = share > FLAG_EXCLUDE_SHARE
+        scaled = (share > 0) & ~excluded
+        clean = _monthly(df[clean_rows], freq).reindex(out.index)
+        out.loc[scaled] = clean.loc[scaled]
+        out.loc[scaled, "Quantity_Sold"] *= (n_days / clean_days)[scaled]
+        out["Flagged_Share"] = share
+        out["Excluded"] = excluded
+        if scaled.any():
+            warnings.append(Msg("warn_flag_scaled", n=int(scaled.sum())))
+        if excluded.any():
+            months = df["Date"].dt.to_period("M").dt.start_time
+            has_stockout = (df[FLAG] == "stockout").groupby(months).any().reindex(out.index, fill_value=False)
+            n_stockout = int((excluded & has_stockout).sum())
+            warnings.append(Msg("warn_flag_excluded", n=int(excluded.sum()), stockout=n_stockout,
+                                promo=int(excluded.sum()) - n_stockout))
+
+    fit = out[~out["Excluded"]] if "Excluded" in out else out
+    n = len(fit)
     if n < MIN_PERIODS_FIT:
         raise DataValidationError(Msg("err_too_few_months", n=n, min_n=MIN_PERIODS_FIT))
     if n < MIN_PERIODS_WARN:
         warnings.append(Msg("warn_few_months", n=n, min_n=MIN_PERIODS_WARN))
-    if out["Price_Charged"].nunique() < 2 or out["Price_Charged"].std() < 1e-9:
+    if fit["Price_Charged"].nunique() < 2 or fit["Price_Charged"].std() < 1e-9:
         raise DataValidationError(Msg("err_price_constant"))
     return out, warnings
 

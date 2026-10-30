@@ -1,8 +1,8 @@
 """Generate sample_data.csv: 24 months of daily sales with a known demand curve.
 
 True daily demand:  Q = 120 - 2.0 * Price + 1.0 * Competitor_Price + noise
-Prices are set once a month (with occasional weekend promos), so the monthly
-aggregates span a wide enough price range to identify the slope.
+Prices are set once a month (with occasional weekend promos, marked Flag=promo),
+so the monthly aggregates span a wide enough price range to identify the slope.
 
 Usage:  python scripts/generate_sample_data.py
 """
@@ -42,6 +42,7 @@ def generate(start="2024-10-01", end="2026-09-30", seed=SEED) -> pd.DataFrame:
         "Quantity_Sold": qty,
         "Cost_Per_Unit": cost,
         "Competitor_Price": comp.round(2),
+        "Flag": np.where(promo, "promo", ""),
     })
 
 

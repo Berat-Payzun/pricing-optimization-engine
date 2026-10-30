@@ -13,6 +13,9 @@ to a monthly index. Series were verified live on 2026-10-26:
   live SDMX API, each with the stale MEI series kept as a fallback.
 - "EU" is the euro-area average (HICP for the 19-country euro area), not any single country.
 - FRED has no Turkish lira daily FX series (DEXTKUS returns 404), so TRY relies on Yahoo only.
+- "vat" is the standard VAT rate (%) used as the default when prices include VAT. "EU" uses 19%
+  as a euro-area placeholder; the US has state sales taxes added on top of the shelf price, and
+  Brazil's layered taxes (ICMS, PIS/COFINS) don't fit one rate, so both start at 0.
 - The World Bank's global inflation series on FRED is FPCPITOTLZGWLD (World = WLD); it is an
   annual % rate published with roughly a one-year lag.
 """
@@ -22,6 +25,7 @@ COUNTRY_MAP = {
         "name": "United States",
         "currency": "USD",
         "symbol": "$",
+        "vat": 0,
         "cpi_sources": [("fred", "CPIAUCSL")],
         "fx_yahoo": None,
         "fx_fred": None,
@@ -31,6 +35,7 @@ COUNTRY_MAP = {
         "name": "Eurozone",
         "currency": "EUR",
         "symbol": "€",
+        "vat": 19,
         "cpi_sources": [("fred", "CP0000EZ19M086NEST")],
         "fx_yahoo": "EURUSD=X",
         "fx_fred": "DEXUSEU",
@@ -40,6 +45,7 @@ COUNTRY_MAP = {
         "name": "Germany",
         "currency": "EUR",
         "symbol": "€",
+        "vat": 19,
         "cpi_sources": [("fred", "CP0000DEM086NEST"), ("fred", "DEUCPIALLMINMEI")],
         "fx_yahoo": "EURUSD=X",
         "fx_fred": "DEXUSEU",
@@ -49,6 +55,7 @@ COUNTRY_MAP = {
         "name": "France",
         "currency": "EUR",
         "symbol": "€",
+        "vat": 20,
         "cpi_sources": [("fred", "CP0000FRM086NEST"), ("fred", "FRACPIALLMINMEI")],
         "fx_yahoo": "EURUSD=X",
         "fx_fred": "DEXUSEU",
@@ -58,6 +65,7 @@ COUNTRY_MAP = {
         "name": "Italy",
         "currency": "EUR",
         "symbol": "€",
+        "vat": 22,
         "cpi_sources": [("fred", "CP0000ITM086NEST"), ("fred", "ITACPIALLMINMEI")],
         "fx_yahoo": "EURUSD=X",
         "fx_fred": "DEXUSEU",
@@ -67,6 +75,7 @@ COUNTRY_MAP = {
         "name": "Spain",
         "currency": "EUR",
         "symbol": "€",
+        "vat": 21,
         "cpi_sources": [("fred", "CP0000ESM086NEST"), ("fred", "ESPCPIALLMINMEI")],
         "fx_yahoo": "EURUSD=X",
         "fx_fred": "DEXUSEU",
@@ -76,6 +85,7 @@ COUNTRY_MAP = {
         "name": "United Kingdom",
         "currency": "GBP",
         "symbol": "£",
+        "vat": 20,
         "cpi_sources": [("ons", "d7bt/mm23"), ("fred", "GBRCPIALLMINMEI")],
         "fx_yahoo": "GBPUSD=X",
         "fx_fred": "DEXUSUK",
@@ -85,6 +95,7 @@ COUNTRY_MAP = {
         "name": "Turkey",
         "currency": "TRY",
         "symbol": "₺",
+        "vat": 20,
         "cpi_sources": [("fred", "CP0000TRM086NEST"), ("fred", "TURCPIALLMINMEI")],
         "fx_yahoo": "TRY=X",
         "fx_fred": None,
@@ -94,6 +105,7 @@ COUNTRY_MAP = {
         "name": "Brazil",
         "currency": "BRL",
         "symbol": "R$",
+        "vat": 0,
         "cpi_sources": [("oecd", "BRA.M.N.CPI.IX._T.N._Z"), ("fred", "BRACPIALLMINMEI")],
         "fx_yahoo": "BRL=X",
         "fx_fred": "DEXBZUS",
@@ -104,6 +116,7 @@ COUNTRY_MAP = {
         "name": "Global (World)",
         "currency": "USD",
         "symbol": "$",
+        "vat": 0,
         "cpi_sources": [("fred_rate", "FPCPITOTLZGWLD")],
         "fx_yahoo": None,
         "fx_fred": None,
@@ -140,6 +153,18 @@ SEASONAL_MIN_MONTHS = 24
 
 # Resamples for the bootstrap range of the optimal price.
 BOOTSTRAP_SAMPLES = 200
+
+# Rolling backtest: forecast each of the last N months from the months before it.
+BACKTEST_MONTHS = 6
+BACKTEST_MIN_MONTHS = 3
+
+# Price test plan: alternate the current and a test price week by week.
+TEST_DEFAULT_STEP = 0.10  # test price = current price ± this, towards the optimum (user-adjustable)
+TEST_STEP_CHOICES = (0.025, 0.05, 0.075, 0.10, 0.15, 0.20, 0.25, 0.30)  # shown in the step / duration trade-off
+TEST_MIN_WEEKS, TEST_MAX_WEEKS = 4, 24
+
+# Guardrail defaults: the largest price step recommended in one go
+MAX_CHANGE_DEFAULT = 15.0  # %
 
 DEFAULTS = {
     "cogs": 10.0,
