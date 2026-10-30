@@ -346,3 +346,42 @@ def test_price_endings(ending, cents):
     assert abs(rec.price - r.optimal["price"]) < 1.0
     assert rec.row["profit"] == pytest.approx(
         run_scenario(fit_demand(synthetic_agg(), "linear"), params(None, current_price=rec.price)).baseline["profit"])
+
+
+# ---------- stockout / promo flags ----------
+
+def stockout_daily(flag: bool, seed=1):
+    """Daily sales over 24 months with true demand Q/day = 120 − 2P. In cheap (busy) months stock runs
+    out at 35 units/day, so recorded sales understate demand; with `flag`, those days are marked."""
+    from data_ingestion import aggregate
+
+    rng = np.random.default_rng(seed)
+    dates = pd.date_range("2024-01-01", "2025-12-31", freq="D")
+    month_price = {m: rng.uniform(30, 55) for m in dates.to_period("M").unique()}
+    price = np.array([month_price[m] for m in dates.to_period("M")])
+    demand = 120 - 2 * price + rng.normal(0, 3, len(dates))
+    sold = np.minimum(demand, 35)
+    df = pd.DataFrame({"Date": dates, "Price_Charged": price, "Quantity_Sold": sold, "Cost_Per_Unit": 20.0,
+                       "Flag": np.where(flag & (demand > 35), "stockout", "")})
+    return aggregate(df)[0]
+
+
+def test_stockouts_bias_slope_unless_flagged():
+    true_monthly_slope = -2 * 30.4
+    unflagged = fit_demand(stockout_daily(flag=False), "linear")
+    flagged = fit_demand(stockout_daily(flag=True), "linear")
+    assert unflagged.b > true_monthly_slope * 0.6  # biased toward zero: looks price-insensitive
+    assert flagged.b == pytest.approx(true_monthly_slope, rel=0.15)
+
+
+def test_excluded_months_are_skipped_by_fit_and_bootstrap():
+    from optimizer import optimal_price_range
+
+    clean = synthetic_agg(noise=0.05)
+    dirty = pd.concat([clean, clean.iloc[:4].set_axis(pd.date_range("2027-01-01", periods=4, freq="MS"))
+                       .assign(Quantity_Sold=0.0)])
+    dirty["Excluded"] = [False] * len(clean) + [True] * 4
+    m_clean, m_dirty = fit_demand(clean, "linear"), fit_demand(dirty, "linear")
+    assert (m_dirty.b, m_dirty.n) == (pytest.approx(m_clean.b), m_clean.n)
+    p = params(m_clean)
+    assert optimal_price_range(dirty, "linear", p, seed=1) == optimal_price_range(clean, "linear", p, seed=1)

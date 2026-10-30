@@ -22,11 +22,14 @@ STRINGS: dict[str, dict[str, str]] = {
         "de": "Verkaufshistorie (CSV oder Excel)",
     },
     "upload_help": {
-        "en": "Columns: Date, Price_Charged, Quantity_Sold; optional Cost_Per_Unit, Competitor_Price, Product. "
+        "en": "Columns: Date, Price_Charged, Quantity_Sold; optional Cost_Per_Unit, Competitor_Price, Product, Flag "
+              "(stockout or promo, left out of the demand fit). "
               "Turkish and German headers work too (e.g. Tarih, Fiyat, Adet / Datum, Preis, Menge).",
-        "tr": "Sütunlar: Date, Price_Charged, Quantity_Sold; isteğe bağlı Cost_Per_Unit, Competitor_Price, Product. "
+        "tr": "Sütunlar: Date, Price_Charged, Quantity_Sold; isteğe bağlı Cost_Per_Unit, Competitor_Price, Product, Flag "
+              "(stok yok veya kampanya; talep modeline katılmaz). "
               "Türkçe ve Almanca başlıklar da kullanılabilir (ör. Tarih, Fiyat, Adet / Datum, Preis, Menge).",
-        "de": "Spalten: Date, Price_Charged, Quantity_Sold; optional Cost_Per_Unit, Competitor_Price, Product. "
+        "de": "Spalten: Date, Price_Charged, Quantity_Sold; optional Cost_Per_Unit, Competitor_Price, Product, Flag "
+              "(ausverkauft oder Aktion, nicht in der Nachfrageschätzung). "
               "Deutsche und türkische Spaltennamen funktionieren auch (z. B. Datum, Preis, Menge / Tarih, Fiyat, Adet).",
     },
     "product_label": {"en": "Product", "tr": "Ürün", "de": "Produkt"},
@@ -306,6 +309,11 @@ STRINGS: dict[str, dict[str, str]] = {
         "de": "Nachfragekurve: verkaufte Stück {per}",
     },
     "chart_observed": {"en": "Observed months", "tr": "Gözlenen aylar", "de": "Beobachtete Monate"},
+    "chart_excluded": {
+        "en": "Excluded (stockout/promo)",
+        "tr": "Hariç tutuldu (stok yok/kampanya)",
+        "de": "Ausgelassen (ausverkauft/Aktion)",
+    },
     "chart_fitted": {"en": "Fitted demand", "tr": "Tahmini talep", "de": "Geschätzte Nachfrage"},
     "chart_shock_title": {
         "en": "Shock impact on net profit ({per})",
@@ -733,6 +741,28 @@ STRINGS: dict[str, dict[str, str]] = {
         "en": "{n} exact duplicate row(s) kept and counted as separate sales.",
         "tr": "{n} birebir tekrarlanan satır korundu ve ayrı satışlar olarak sayıldı.",
         "de": "{n} exakt doppelte Zeile(n) beibehalten und als separate Verkäufe gezählt.",
+    },
+    "warn_flag_unknown": {
+        "en": "Unrecognised Flag value(s) treated as normal sales: {values}. Use 'stockout' or 'promo'.",
+        "tr": "Tanınmayan Flag değer(ler)i normal satış sayıldı: {values}. 'stok yok' veya 'kampanya' kullanın.",
+        "de": "Unbekannte Flag-Werte als normale Verkäufe behandelt: {values}. Verwenden Sie „ausverkauft“ oder "
+              "„Aktion“.",
+    },
+    "warn_flag_scaled": {
+        "en": "{n} month(s) had some stockout/promo days: those days were left out and the month's sales scaled "
+              "up from its normal days.",
+        "tr": "{n} ayda bazı stok yok/kampanya günleri vardı: bu günler çıkarıldı ve ayın satışları normal "
+              "günlerinden ölçeklendi.",
+        "de": "{n} Monat(e) mit einzelnen Ausverkauft-/Aktionstagen: Diese Tage wurden ausgelassen und der "
+              "Monatsabsatz aus den normalen Tagen hochgerechnet.",
+    },
+    "warn_flag_excluded": {
+        "en": "{n} month(s) left out of the demand fit because most days were flagged ({stockout} stockout, "
+              "{promo} promo).",
+        "tr": "Günlerinin çoğu işaretli olduğu için {n} ay talep modelinin dışında bırakıldı ({stockout} stok yok, "
+              "{promo} kampanya).",
+        "de": "{n} Monat(e) aus der Nachfrageschätzung ausgelassen, weil die meisten Tage markiert waren "
+              "({stockout} ausverkauft, {promo} Aktion).",
     },
     "warn_guardrail_conflict": {
         "en": "The price floor/ceiling lies outside the allowed step from the current price: the max-change "

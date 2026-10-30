@@ -189,3 +189,64 @@ def test_rows_differing_only_by_product_are_not_duplicates():
     df, warnings = load_csv(csv(data), default_cogs=5)
     assert len(df) == 2
     assert not any(getattr(w, "key", "") == "warn_duplicates_dropped" for w in warnings)
+
+
+# ---------- stockout / promo flags ----------
+
+def flagged_daily(flags: dict[str, str], qty_flagged=100, months=6):
+    """Daily rows at 10 units/day; `flags` maps a date to its Flag value (sold at a promo price)."""
+    df = daily_frame(months)
+    df["Flag"] = df["Date"].dt.strftime("%Y-%m-%d").map(flags).fillna("")
+    hit = df["Flag"] != ""
+    df.loc[hit, "Quantity_Sold"] = qty_flagged
+    df.loc[hit, "Price_Charged"] = 1.0
+    return df
+
+
+@pytest.mark.parametrize("header,value,expected", [
+    ("Flag", "Promo", "promo"), ("Durum", "Kampanya", "promo"), ("Durum", "Stok yok", "stockout"),
+    ("Kennzeichen", "Ausverkauft", "stockout"), ("Hinweis", "Aktion", "promo"), ("status", "out-of-stock", "stockout"),
+])
+def test_flag_column_aliases_and_values(header, value, expected):
+    df, _ = load_csv(csv(f"Date,Price,Qty,{header}\n2024-01-01,10,5,{value}\n2024-01-02,10,5,"), default_cogs=1)
+    assert df["Flag"].tolist() == [expected, ""]
+
+
+def test_unknown_flag_values_warn_and_count_as_clean():
+    df, warnings = load_csv(csv("Date,Price,Qty,Flag\n2024-01-01,10,5,weird\n2024-01-02,10,5,promo"), default_cogs=1)
+    assert df["Flag"].tolist() == ["", "promo"]
+    assert any(w.key == "warn_flag_unknown" and w.params["values"] == "weird" for w in warnings)
+
+
+def test_partly_flagged_month_scaled_from_clean_days():
+    # January 2024 has 31 days in the frame? daily_frame uses 30-day months from 2024-01-01: Jan 1..30
+    df = flagged_daily({"2024-01-05": "promo", "2024-01-06": "stockout"})
+    agg, warnings = aggregate(df)
+    jan = agg.iloc[0]
+    n_days = df[df["Date"].dt.month == 1]["Date"].nunique()
+    assert jan["Quantity_Sold"] == pytest.approx(10 * (n_days - 2) * n_days / (n_days - 2))
+    assert jan["Price_Charged"] == pytest.approx(10.0)  # promo price of the flagged days left out
+    assert not jan["Excluded"] and jan["Flagged_Share"] == pytest.approx(2 / n_days)
+    assert any(w.key == "warn_flag_scaled" and w.params["n"] == 1 for w in warnings)
+
+
+def test_mostly_flagged_month_is_excluded():
+    df = flagged_daily({f"2024-02-{d:02d}": "stockout" for d in range(1, 25)})
+    agg, warnings = aggregate(df)
+    feb = agg.loc["2024-02-01"]
+    assert feb["Excluded"]
+    w = next(w for w in warnings if w.key == "warn_flag_excluded")
+    assert (w.params["n"], w.params["stockout"], w.params["promo"]) == (1, 1, 0)
+
+
+def test_flagged_row_in_monthly_file_excludes_the_month():
+    data = "Date,Price,Qty,Flag\n" + "\n".join(
+        f"2024-{m:02d}-01,{10 + m},{100 - m},{'promo' if m == 3 else ''}" for m in range(1, 9))
+    df, _ = load_csv(csv(data), default_cogs=1)
+    agg, _ = aggregate(df)
+    assert agg["Excluded"].tolist() == [m == 3 for m in range(1, 9)]
+
+
+def test_no_flag_column_leaves_aggregate_unchanged():
+    agg, _ = aggregate(daily_frame())
+    assert "Excluded" not in agg and "Flagged_Share" not in agg

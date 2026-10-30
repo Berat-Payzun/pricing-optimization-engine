@@ -195,9 +195,13 @@ if isinstance(model, Exception):
     st.error(t("err_model", model=t(f"model_{model_kind}"), error=error_text(model)))
     st.stop()
 
-current_price = float(agg["Price_Charged"].iloc[-1])
-base_cogs = cost_override if cost_override > 0 else float(agg["Cost_Per_Unit"].iloc[-1])
-base_comp = float(agg["Real_Competitor_Price"].iloc[-1]) if model.has_comp else None
+# Months mostly flagged as stockout/promo stay in the charts but not in the fit, and a promo
+# month's price is never "current"
+excluded = agg["Excluded"].astype(bool) if "Excluded" in agg else pd.Series(False, index=agg.index)
+latest = agg[~excluded].iloc[-1]
+current_price = float(latest["Price_Charged"])
+base_cogs = cost_override if cost_override > 0 else float(latest["Cost_Per_Unit"])
+base_comp = float(latest["Real_Competitor_Price"]) if model.has_comp else None
 
 with st.sidebar:
     max_price = st.number_input(t("max_price_label", sym=sym), min_value=0.01,
@@ -408,9 +412,16 @@ with charts_area:
     with left:
         fig = go.Figure()
         price_col = "Real_Price"
-        fig.add_trace(go.Scatter(x=agg[price_col], y=agg["Quantity_Sold"] * PERIOD_MULT[timeframe], mode="markers",
-                                 name=t("chart_observed"), marker=dict(color=col["s2"], size=9, line=dict(color="white", width=1)),
+        fit_months, out_months = agg[~excluded], agg[excluded]
+        fig.add_trace(go.Scatter(x=fit_months[price_col], y=fit_months["Quantity_Sold"] * PERIOD_MULT[timeframe],
+                                 mode="markers", name=t("chart_observed"),
+                                 marker=dict(color=col["s2"], size=9, line=dict(color="white", width=1)),
                                  hovertemplate=f"{sym}%{{x:,.2f}} → %{{y:,.0f}} {units}<extra></extra>"))
+        if not out_months.empty:
+            fig.add_trace(go.Scatter(x=out_months[price_col], y=out_months["Quantity_Sold"] * PERIOD_MULT[timeframe],
+                                     mode="markers", name=t("chart_excluded"),
+                                     marker=dict(color="rgba(0,0,0,0)", size=9, line=dict(color=col["muted"], width=1.5)),
+                                     hovertemplate=f"{sym}%{{x:,.2f}} → %{{y:,.0f}} {units}<extra></extra>"))
         # Fitted demand in today's money (no shock), comparable with the observed real prices
         fig.add_trace(go.Scatter(x=today.curve["price"], y=today.curve["q_demand"], name=t("chart_fitted"), line=dict(color=col["s1"], width=2),
                                  hovertemplate=f"%{{y:,.0f}} {units}<extra></extra>"))

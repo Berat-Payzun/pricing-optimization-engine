@@ -90,6 +90,8 @@ class _Design:
 
 
 def _design(agg: pd.DataFrame, kind: str, seasonal: bool) -> _Design:
+    if "Excluded" in agg:  # stockout / promo months (data_ingestion.aggregate)
+        agg = agg[~agg["Excluded"].astype(bool)]
     price_col = "Real_Price" if "Real_Price" in agg else "Price_Charged"
     comp_col = "Real_Competitor_Price" if "Real_Competitor_Price" in agg else (
         "Competitor_Price" if "Competitor_Price" in agg else None

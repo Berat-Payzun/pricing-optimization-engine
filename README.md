@@ -55,8 +55,11 @@ The app opens with `sample_data.csv` loaded. You can regenerate it with `python 
 | `Cost_Per_Unit` | float | no | Maliyet, Birim Maliyet / Kosten, Stückkosten | Missing values use the sidebar "Default COGS" |
 | `Competitor_Price` | float | no | Rakip Fiyatı / Konkurrenzpreis | Enables cross-price elasticity and the competitor slider |
 | `Product` | text | no | Ürün / Produkt, Artikel (also `SKU`) | Several products in one file; pick one in the sidebar |
+| `Flag` | text | no | Durum / Kennzeichen, Hinweis (also `Status`) | `stockout` or `promo` (also `stok yok`, `kampanya` / `ausverkauft`, `Aktion`). Flagged days are left out of the demand fit (see below) |
 
 Column names are matched case-insensitively, ignoring accents, spaces and dashes. English aliases (`price`, `qty`, `cost`, `competitor`) work too.
+
+**Stockouts and promotions.** Sales on a stockout day understate demand, and promo days sell at a temporary price, so both would bias the demand curve. Days with a flagged row are left out: a month's sales come from its clean days, scaled up to all its days (`Q × days / clean days`). A month where more than half the days are flagged is shown in the charts but left out of the fit, and a promo month is never used as the "current" price.
 
 `.xlsx` files are read from the first sheet. CSVs saved by Excel in Turkish or German locales also work: `;` separators, decimal commas (`1.234,56`), `dd.mm.yyyy` dates and Windows encodings (cp1254/cp1252) are detected automatically.
 
