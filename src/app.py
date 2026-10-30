@@ -19,8 +19,8 @@ import streamlit as st
 from config import BOOTSTRAP_SAMPLES, COUNTRY_MAP, DEFAULTS, MAX_CHANGE_DEFAULT, PERIOD_MULT, SEASONAL_MIN_MONTHS
 from data_ingestion import PRODUCT, DataValidationError, aggregate, deflate, load_csv
 from macro_api import get_fx, get_inflation
-from optimizer import (ENDINGS, Guardrails, ScenarioParams, backtest, elasticities, fit_demand, optimal_price_range,
-                       recommend, run_scenario)
+from optimizer import (ENDINGS, Guardrails, ScenarioParams, backtest, elasticities, evaluate_test, fit_demand,
+                       optimal_price_range, recommend, run_scenario, test_plan)
 from report import Chart, Series, VLine, build_excel, build_pdf
 from translations import LANGUAGES, localize, translate
 
@@ -485,6 +485,41 @@ st.plotly_chart(fig, width="stretch")
 st.caption(t("caption_shock", d_price=money(opt["price"] - unconstrained, sym),
              d_profit=money(opt["profit"] - today.optimal["profit"], sym), per=per))
 
+# ---------- price test plan ----------
+
+st.divider()
+st.subheader(t("test_header"))
+st.caption(t("test_caption"))
+# Conservative noise: the larger of the in-sample residual SD and the backtest's forecast error
+plan = test_plan(model, today_params, rec.price, unconstrained, max(model.resid_sd, bt.rmse if bt else 0.0), rails)
+st.markdown(t("test_summary", weeks=plan.weeks, half=plan.weeks // 2, test=money(plan.test_price, sym),
+              current=money(current_price, sym), exp_test=f"{plan.expected_test:,.0f}",
+              exp_current=f"{plan.expected_current:,.0f}", units=units))
+for w in plan.warnings:
+    st.warning(localize(w, lang), icon=":material/warning:")
+plan_columns = {"week": t("col_week"), "arm": t("col_arm"), "price": t("col_price"), "expected": t("col_expected"),
+                "low": t("col_low"), "high": t("col_high")}
+plan_table = (plan.schedule.assign(arm=plan.schedule["arm"].map({"test": t("arm_test"), "current": t("arm_current")}))
+              .rename(columns=plan_columns).round(2))
+plan_table[t("col_actual")] = None
+edited = st.data_editor(
+    plan_table, hide_index=True, width="stretch", disabled=list(plan_columns.values()),
+    column_config={t("col_actual"): st.column_config.NumberColumn(min_value=0.0, step=1.0)},
+    # A new plan (product, model or prices changed) starts with an empty Actual column
+    key=f"test_plan_{product}_{model_kind}_{plan.test_price:.2f}_{current_price:.2f}_{plan.weeks}",
+)
+test_result = evaluate_test(plan, edited[t("col_actual")])
+if test_result is None:
+    st.caption(t("test_need_more"))
+else:
+    text = t(f"test_verdict_{test_result.code}", observed=f"{test_result.observed_diff:+,.0f}",
+             expected=f"{plan.diff:+,.0f}", low=f"{test_result.ci[0]:+,.0f}", high=f"{test_result.ci[1]:+,.0f}",
+             e_obs=f"{test_result.elasticity_observed:.2f}", e_model=f"{test_result.elasticity_model:.2f}")
+    (st.success if test_result.code == "consistent" else st.warning)(text)
+    if abs(test_result.level_ratio - 1) > 0.2:
+        st.info(t("test_level_shift", pct=(test_result.level_ratio - 1) * 100))
+st.caption(t("test_not_saved"))
+
 # ---------- details ----------
 
 with st.expander(t("details_expander")):
@@ -564,6 +599,8 @@ summary = ([(t("product_label"), product)] if product else []) + [
     (t("sum_fixed", per=per), money(today.fixed_final, sym)),
     (t("sum_break_even"), ", ".join(money(b, sym) for b in today.break_evens) or t("sum_none")),
     (t("sum_equation"), model.equation()),
+    (t("sum_test_plan"), t("sum_test_plan_value", test=money(plan.test_price, sym), weeks=plan.weeks,
+                           diff=f"{plan.diff:+,.0f}")),
     (t("sum_scenario"), scenario_month),
     (t("shock_infl"), f"{inflation:.1f}%"),
     (t("shock_fx"), "—" if is_usd else f"{fx_shift:+.1f}%"),
@@ -592,6 +629,7 @@ sheets = {
     t("sheet_scenario_curve"): curve_table(result.curve),
     t("sheet_monthly"): agg.round(4).reset_index(),
     t("sheet_models"): model_table,
+    t("sheet_test_plan"): plan_table,  # Actual column left empty to fill in during the test
     **({t("sheet_backtest"): pd.DataFrame({t("col_month"): bt.months.strftime("%Y-%m"), t("chart_actual"): bt.actual,
                                            t("chart_forecast"): bt.forecast, t("chart_naive"): bt.naive}).round(2)}
        if bt is not None else {}),

@@ -434,3 +434,77 @@ def test_fit_reports_residual_sd():
     noiseless, noisy = fit_demand(synthetic_agg(), "linear"), fit_demand(synthetic_agg(noise=0.05), "linear")
     assert noiseless.resid_sd == pytest.approx(0, abs=1e-6)
     assert noisy.resid_sd > 10
+
+
+# ---------- price test plan ----------
+# Imported inside each test: pytest would otherwise collect optimizer.test_plan / TestPlan as tests.
+
+def plan_for(rec_price=50.0, noise=60.0, **kw):
+    import optimizer
+
+    m = fit_demand(synthetic_agg(), "linear")
+    p = params(m, **kw)
+    return m, p, optimizer.test_plan(m, p, rec_price, rec_price, noise, optimizer.Guardrails(max_change=0))
+
+
+def test_plan_weeks_follow_power_formula():
+    from optimizer import WEEKS_PER_MONTH, Z90, Z_POWER
+
+    m, p, plan = plan_for(rec_price=50.0, noise=60.0)
+    weekly = lambda price: m.predict(price, 50.0) / WEEKS_PER_MONTH
+    assert plan.expected_test == pytest.approx(weekly(50.0)) and plan.expected_current == pytest.approx(weekly(45.0))
+    sd_week = 60.0 / np.sqrt(WEEKS_PER_MONTH)
+    per_arm = np.ceil(2 * (Z90 + Z_POWER) ** 2 * sd_week ** 2 / plan.diff ** 2)
+    assert plan.weeks == max(4, 2 * per_arm)
+    assert plan.schedule["arm"].tolist()[:3] == ["test", "current", "test"]
+    assert plan.schedule["price"].tolist()[:2] == [50.0, 45.0]
+    row = plan.schedule.iloc[0]
+    assert row["high"] - row["expected"] == pytest.approx(Z90 * sd_week)
+
+
+def test_plan_clamps_weeks_and_warns_when_underpowered():
+    _, _, quiet = plan_for(noise=1.0)
+    assert quiet.weeks == 4 and quiet.warnings == []
+    _, _, noisy = plan_for(noise=5000.0)
+    assert noisy.weeks == 24
+    assert [w.key for w in noisy.warnings] == ["warn_test_underpowered"]
+
+
+def test_small_recommended_move_tests_a_five_percent_step():
+    import optimizer
+
+    m = fit_demand(synthetic_agg(), "linear")
+    p = params(m)  # current price 45
+    up = optimizer.test_plan(m, p, 45.2, 48.0, 60.0, optimizer.Guardrails(max_change=0))
+    down = optimizer.test_plan(m, p, 45.0, 40.0, 60.0, optimizer.Guardrails(max_change=0, ending=".99"))
+    assert up.test_price == pytest.approx(47.25)
+    assert down.test_price == 42.99  # 42.75 rounded to the nearest .99 ending
+
+
+def test_weekly_expectation_respects_capacity():
+    _, _, plan = plan_for(capacity=1000.0)  # monthly capacity → ~230 per week
+    assert plan.expected_current == pytest.approx(1000.0 * 12 / 52)
+
+
+def verdict(plan, test_shift=0.0, both_shift=0.0, weeks=None):
+    from optimizer import evaluate_test
+
+    s = plan.schedule.head(weeks) if weeks else plan.schedule
+    actual = s["expected"] + both_shift + np.where(s["arm"] == "test", test_shift, 0.0)
+    return evaluate_test(plan, list(actual) + [None] * (plan.weeks - len(s)))
+
+
+def test_evaluate_needs_two_weeks_per_arm():
+    _, _, plan = plan_for()
+    assert verdict(plan, weeks=3) is None
+    assert verdict(plan, weeks=4) is not None
+
+
+def test_verdict_codes():
+    _, _, plan = plan_for(rec_price=50.0, noise=20.0)  # test price above current: fewer units expected
+    assert verdict(plan).code == "consistent"
+    assert verdict(plan, test_shift=-3 * abs(plan.diff)).code == "more_sensitive"
+    assert verdict(plan, test_shift=+abs(plan.diff)).code == "less_sensitive"  # no drop at all
+    v = verdict(plan, both_shift=0.3 * plan.expected_current)  # season shift hits both arms
+    assert v.code == "consistent" and v.level_ratio > 1.2
+    assert verdict(plan).elasticity_observed == pytest.approx(verdict(plan).elasticity_model)

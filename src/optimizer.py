@@ -13,7 +13,8 @@ Pipeline (Steps refer to the architecture guide):
      price-based fees (commission, payment) come off each unit's revenue.
   9. Guardrails on the recommendation               (recommend): max step, min margin,
      floor/ceiling and price endings
-Model checking: a rolling out-of-sample backtest (backtest).
+Model checking: a rolling out-of-sample backtest (backtest) and a price test plan that alternates the
+current and a test price week by week (test_plan, evaluate_test).
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ import pandas as pd
 from sklearn.linear_model import LinearRegression
 
 from config import (BACKTEST_MIN_MONTHS, BACKTEST_MONTHS, BOOTSTRAP_SAMPLES, PERIOD_MULT, PRICE_GRID_POINTS,
-                    SEASONAL_MIN_MONTHS)
+                    SEASONAL_MIN_MONTHS, TEST_FALLBACK_STEP, TEST_MAX_WEEKS, TEST_MIN_STEP, TEST_MIN_WEEKS)
 from translations import Msg
 
 
@@ -501,6 +502,122 @@ def backtest(agg: pd.DataFrame, kind: str, seasonal: bool = False, horizon: int 
         q = data["Quantity_Sold"].to_numpy(dtype=float)
         return Backtest(months=data.index[-h:], actual=q[-h:], forecast=np.array(forecast), naive=q[-h - 1:-1])
     return None
+
+
+WEEKS_PER_MONTH = 52 / 12
+Z90 = 1.645  # two-sided 90% confidence
+Z_POWER = 0.8416  # 80% power
+
+
+@dataclass
+class TestPlan:
+    current_price: float
+    test_price: float
+    weeks: int  # total, half at each price
+    expected_current: float  # weekly units
+    expected_test: float
+    sd_week: float
+    schedule: pd.DataFrame  # week, arm ("test" | "current"), price, expected, low, high
+    warnings: list[str]
+
+    @property
+    def diff(self) -> float:
+        """Expected weekly units at the test price minus at the current price."""
+        return self.expected_test - self.expected_current
+
+
+def _test_price(p: ScenarioParams, rec_price: float, unconstrained: float, rails: Guardrails) -> float:
+    current = p.current_price
+    if abs(rec_price / current - 1) >= TEST_MIN_STEP:
+        return rec_price
+    # The recommendation barely moves: still test a step towards the optimum, to learn the slope
+    step = TEST_FALLBACK_STEP if unconstrained >= current else -TEST_FALLBACK_STEP
+    low, high = _bounds(rails, current)
+    target = float(np.clip(current * (1 + step), low, high))
+    if rails.ending == "none":
+        return round(target, 2)
+    candidates = [c for c in _with_ending(target, rails.ending) if low <= c <= high and c > 0]
+    return min(candidates, key=lambda c: abs(c - target)) if candidates else round(target, 2)
+
+
+def test_plan(model: DemandModel, p: ScenarioParams, rec_price: float, unconstrained: float,
+              noise_sd_month: float, rails: Guardrails) -> TestPlan:
+    """Alternating-weeks price test: test price in odd weeks, current price in even weeks, so
+    season and trend hit both arms alike. The length gives 80% power to detect the predicted
+    difference at 90% confidence, from the model's monthly noise."""
+    s = _setup(model.has_comp, p)
+    test_price = _test_price(p, rec_price, unconstrained, rails)
+    weekly_cap = p.capacity / PERIOD_MULT[p.period] / WEEKS_PER_MONTH
+
+    def weekly(price: float) -> float:  # average month, today's money
+        return float(min(model.predict(price / s.level, s.comp_real) / WEEKS_PER_MONTH, weekly_cap))
+
+    exp_cur, exp_test = weekly(p.current_price), weekly(test_price)
+    sd_week = noise_sd_month / np.sqrt(WEEKS_PER_MONTH)
+    diff, warnings = abs(exp_test - exp_cur), []
+    per_arm = np.ceil(2 * (Z90 + Z_POWER) ** 2 * sd_week ** 2 / diff ** 2) if diff > 0 else np.inf
+    weeks = int(np.clip(2 * per_arm, TEST_MIN_WEEKS, TEST_MAX_WEEKS))
+    if 2 * per_arm > TEST_MAX_WEEKS:
+        warnings.append(Msg("warn_test_underpowered", weeks=TEST_MAX_WEEKS))
+
+    arms = np.where(np.arange(weeks) % 2 == 0, "test", "current")
+    expected = np.where(arms == "test", exp_test, exp_cur)
+    schedule = pd.DataFrame({
+        "week": np.arange(1, weeks + 1),
+        "arm": arms,
+        "price": np.where(arms == "test", test_price, p.current_price),
+        "expected": expected,
+        "low": np.maximum(expected - Z90 * sd_week, 0.0),
+        "high": expected + Z90 * sd_week,
+    })
+    return TestPlan(p.current_price, test_price, weeks, exp_cur, exp_test, float(sd_week), schedule, warnings)
+
+
+@dataclass
+class TestVerdict:
+    code: str  # "consistent" | "more_sensitive" | "less_sensitive"
+    observed_diff: float  # mean weekly units, test arm minus current arm
+    ci: tuple[float, float]  # 90% interval of observed_diff
+    elasticity_observed: float  # arc elasticity between the two prices
+    elasticity_model: float
+    level_ratio: float  # all observed weeks vs all expected: far from 1 means a season/trend shift
+
+
+def _arc_elasticity(q_test, q_cur, p_test, p_cur) -> float:
+    dq, dp = (q_test - q_cur) / ((q_test + q_cur) / 2), (p_test - p_cur) / ((p_test + p_cur) / 2)
+    return dq / dp if dp and (q_test + q_cur) else float("nan")
+
+
+def evaluate_test(plan: TestPlan, actual) -> TestVerdict | None:
+    """Compare entered weekly units with the plan. Needs at least two weeks at each price.
+    The price response is judged on the difference between arms, which a common season or
+    trend shift cancels out of."""
+    a = pd.to_numeric(pd.Series(list(actual), dtype=object), errors="coerce").to_numpy(dtype=float)
+    arms = plan.schedule["arm"].to_numpy()
+    test, cur = a[(arms == "test") & ~np.isnan(a)], a[(arms == "current") & ~np.isnan(a)]
+    if len(test) < 2 or len(cur) < 2:
+        return None
+    observed = float(test.mean() - cur.mean())
+    # Noise from the entered weeks, but never below what the model expects
+    sd_t, sd_c = max(test.std(ddof=1), plan.sd_week), max(cur.std(ddof=1), plan.sd_week)
+    se = float(np.sqrt(sd_t ** 2 / len(test) + sd_c ** 2 / len(cur)))
+    ci = (observed - Z90 * se, observed + Z90 * se)
+    if ci[0] <= plan.diff <= ci[1]:
+        code = "consistent"
+    else:
+        # Units lost per unit of price increase: steeper than predicted = more price-sensitive
+        slope_obs = observed / (plan.test_price - plan.current_price)
+        slope_model = plan.diff / (plan.test_price - plan.current_price)
+        code = "more_sensitive" if slope_obs < slope_model else "less_sensitive"
+    expected = plan.schedule["expected"].to_numpy()[~np.isnan(a)]
+    return TestVerdict(
+        code=code,
+        observed_diff=observed,
+        ci=ci,
+        elasticity_observed=_arc_elasticity(test.mean(), cur.mean(), plan.test_price, plan.current_price),
+        elasticity_model=_arc_elasticity(plan.expected_test, plan.expected_current, plan.test_price, plan.current_price),
+        level_ratio=float(a[~np.isnan(a)].sum() / expected.sum()) if expected.sum() > 0 else float("nan"),
+    )
 
 
 def optimal_price_range(agg: pd.DataFrame, kind: str, params: ScenarioParams, seasonal: bool = False,

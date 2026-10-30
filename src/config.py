@@ -158,6 +158,11 @@ BOOTSTRAP_SAMPLES = 200
 BACKTEST_MONTHS = 6
 BACKTEST_MIN_MONTHS = 3
 
+# Price test plan: alternate the current and a test price week by week.
+TEST_MIN_STEP = 0.02  # a smaller recommended move is tested with a TEST_FALLBACK_STEP step instead
+TEST_FALLBACK_STEP = 0.05
+TEST_MIN_WEEKS, TEST_MAX_WEEKS = 4, 24
+
 # Guardrail defaults: the largest price step recommended in one go
 MAX_CHANGE_DEFAULT = 15.0  # %
 

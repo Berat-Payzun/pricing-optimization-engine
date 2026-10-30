@@ -631,6 +631,95 @@ STRINGS: dict[str, dict[str, str]] = {
     },
     "scenario_profit_label": {"en": "Scenario peak profit ({per})", "tr": "Senaryo zirve kârı ({per})", "de": "Szenario-Maximalgewinn ({per})"},
     "scenario_cogs_label": {"en": "Scenario unit cost", "tr": "Senaryo birim maliyeti", "de": "Szenario-Stückkosten"},
+    # ---------- price test plan ----------
+    "test_header": {"en": "Price test plan", "tr": "Fiyat testi planı", "de": "Preistest-Plan"},
+    "test_caption": {
+        "en": "The demand curve is estimated from your own price history, so it can be biased. A short controlled "
+              "test checks it: alternate two prices week by week, so seasons and trends affect both alike, then "
+              "enter the weekly units sold below.",
+        "tr": "Talep eğrisi kendi fiyat geçmişinizden tahmin edildiği için yanlı olabilir. Kısa ve kontrollü bir "
+              "test bunu sınar: iki fiyatı haftadan haftaya dönüşümlü uygulayın (böylece mevsim ve eğilimler ikisini "
+              "de aynı etkiler), ardından haftalık satış adetlerini aşağıya girin.",
+        "de": "Die Nachfragekurve wird aus Ihrer eigenen Preishistorie geschätzt und kann daher verzerrt sein. Ein "
+              "kurzer, kontrollierter Test prüft sie: Wechseln Sie Woche für Woche zwischen zwei Preisen, damit "
+              "Saison und Trend beide gleich treffen, und tragen Sie unten die wöchentlich verkauften Stück ein.",
+    },
+    "test_summary": {
+        "en": "Run **{weeks} weeks**: {half} at the test price **{test}** and {half} at the current price "
+              "**{current}**, alternating. Expected: about **{exp_test}** vs **{exp_current}** {units} per week.",
+        "tr": "**{weeks} hafta** uygulayın: dönüşümlü olarak {half} hafta test fiyatı **{test}**, {half} hafta mevcut "
+              "fiyat **{current}**. Beklenen: haftada yaklaşık **{exp_test}** ve **{exp_current}** {units}.",
+        "de": "**{weeks} Wochen** durchführen: abwechselnd {half} zum Testpreis **{test}** und {half} zum aktuellen "
+              "Preis **{current}**. Erwartet: etwa **{exp_test}** vs. **{exp_current}** {units} pro Woche.",
+    },
+    "col_week": {"en": "Week", "tr": "Hafta", "de": "Woche"},
+    "col_arm": {"en": "Price group", "tr": "Fiyat grubu", "de": "Preisgruppe"},
+    "col_expected": {"en": "Expected units", "tr": "Beklenen adet", "de": "Erwartete Stück"},
+    "col_low": {"en": "90% low", "tr": "%90 alt", "de": "90 % unten"},
+    "col_high": {"en": "90% high", "tr": "%90 üst", "de": "90 % oben"},
+    "col_actual": {"en": "Actual units", "tr": "Gerçekleşen adet", "de": "Tatsächliche Stück"},
+    "arm_test": {"en": "Test price", "tr": "Test fiyatı", "de": "Testpreis"},
+    "arm_current": {"en": "Current price", "tr": "Mevcut fiyat", "de": "Aktueller Preis"},
+    "test_need_more": {
+        "en": "Enter actual units for at least two weeks at each price to get a verdict.",
+        "tr": "Sonuç için her fiyatta en az iki haftanın gerçekleşen adedini girin.",
+        "de": "Für ein Ergebnis mindestens zwei Wochen je Preis mit tatsächlichen Stückzahlen eintragen.",
+    },
+    "test_verdict_consistent": {
+        "en": "Consistent with the model: the test price changed weekly sales by {observed} units (90% range "
+              "{low} to {high}); the model expected {expected}. Elasticity observed {e_obs} vs model {e_model}.",
+        "tr": "Modelle tutarlı: test fiyatı haftalık satışı {observed} adet değiştirdi (%90 aralık {low} ile {high}); "
+              "model {expected} bekliyordu. Gözlenen esneklik {e_obs}, model {e_model}.",
+        "de": "Passt zum Modell: Der Testpreis veränderte den Wochenabsatz um {observed} Stück (90 %-Bereich {low} "
+              "bis {high}); das Modell erwartete {expected}. Elastizität beobachtet {e_obs} vs. Modell {e_model}.",
+    },
+    "test_verdict_more_sensitive": {
+        "en": "Customers are more price-sensitive than the model thinks: weekly sales changed by {observed} units "
+              "(90% range {low} to {high}) where the model expected {expected}. Elasticity observed {e_obs} vs "
+              "model {e_model}. Be careful with price rises; add the test weeks to your data and refit.",
+        "tr": "Müşteriler fiyata modelin sandığından daha duyarlı: haftalık satış {observed} adet değişti (%90 aralık "
+              "{low} ile {high}), model {expected} bekliyordu. Gözlenen esneklik {e_obs}, model {e_model}. Fiyat "
+              "artışlarında dikkatli olun; test haftalarını verinize ekleyip modeli yeniden kurun.",
+        "de": "Kunden reagieren preisempfindlicher als vom Modell angenommen: Der Wochenabsatz änderte sich um "
+              "{observed} Stück (90 %-Bereich {low} bis {high}), erwartet waren {expected}. Elastizität beobachtet "
+              "{e_obs} vs. Modell {e_model}. Vorsicht bei Preiserhöhungen; Testwochen in die Daten aufnehmen und "
+              "neu schätzen.",
+    },
+    "test_verdict_less_sensitive": {
+        "en": "Customers are less price-sensitive than the model thinks: weekly sales changed by {observed} units "
+              "(90% range {low} to {high}) where the model expected {expected}. Elasticity observed {e_obs} vs "
+              "model {e_model}. There may be room to price higher; add the test weeks to your data and refit.",
+        "tr": "Müşteriler fiyata modelin sandığından daha az duyarlı: haftalık satış {observed} adet değişti (%90 "
+              "aralık {low} ile {high}), model {expected} bekliyordu. Gözlenen esneklik {e_obs}, model {e_model}. "
+              "Daha yüksek fiyat için alan olabilir; test haftalarını verinize ekleyip modeli yeniden kurun.",
+        "de": "Kunden reagieren weniger preisempfindlich als vom Modell angenommen: Der Wochenabsatz änderte sich "
+              "um {observed} Stück (90 %-Bereich {low} bis {high}), erwartet waren {expected}. Elastizität "
+              "beobachtet {e_obs} vs. Modell {e_model}. Möglicherweise ist ein höherer Preis drin; Testwochen in "
+              "die Daten aufnehmen und neu schätzen.",
+    },
+    "test_level_shift": {
+        "en": "Overall sales ran {pct:+.0f}% vs expected at both prices, likely a season or trend shift. The "
+              "price comparison above is unaffected because both prices saw it.",
+        "tr": "Toplam satışlar her iki fiyatta da beklenene göre {pct:+.0f}% saptı; büyük olasılıkla mevsim veya "
+              "eğilim etkisi. Her iki fiyat da bundan etkilendiği için yukarıdaki karşılaştırma geçerlidir.",
+        "de": "Der Gesamtabsatz lag bei beiden Preisen {pct:+.0f} % neben der Erwartung, vermutlich Saison oder "
+              "Trend. Der Preisvergleich oben bleibt gültig, da beide Preise betroffen waren.",
+    },
+    "test_not_saved": {
+        "en": "Entries are not saved when you close the page. The Excel export has the plan with an empty "
+              "Actual column to fill in as the test runs.",
+        "tr": "Girdiler sayfayı kapattığınızda kaydedilmez. Excel dışa aktarımında, test sürerken doldurmanız "
+              "için boş bir Gerçekleşen sütunuyla plan yer alır.",
+        "de": "Eingaben werden beim Schließen der Seite nicht gespeichert. Der Excel-Export enthält den Plan mit "
+              "einer leeren Ist-Spalte zum Ausfüllen während des Tests.",
+    },
+    "sheet_test_plan": {"en": "Test plan", "tr": "Test planı", "de": "Testplan"},
+    "sum_test_plan": {"en": "Price test plan", "tr": "Fiyat testi planı", "de": "Preistest-Plan"},
+    "sum_test_plan_value": {
+        "en": "test {test} for {weeks} weeks (alternating); expected {diff} units/week vs current",
+        "tr": "{test} fiyatını {weeks} hafta test edin (dönüşümlü); mevcut fiyata göre beklenen {diff} adet/hafta",
+        "de": "{test} {weeks} Wochen testen (abwechselnd); erwartet {diff} Stück/Woche ggü. aktuell",
+    },
     # ---------- export summary ----------
     "sum_unconstrained": {"en": "Unconstrained optimum (today)", "tr": "Kısıtsız optimum (bugün)", "de": "Optimum ohne Regeln (heute)"},
     "sum_limits": {"en": "Limited by", "tr": "Sınırlayan", "de": "Begrenzt durch"},
@@ -805,6 +894,15 @@ STRINGS: dict[str, dict[str, str]] = {
               "{promo} kampanya).",
         "de": "{n} Monat(e) aus der Nachfrageschätzung ausgelassen, weil die meisten Tage markiert waren "
               "({stockout} ausverkauft, {promo} Aktion).",
+    },
+    "warn_test_underpowered": {
+        "en": "Even {weeks} weeks may not be enough to tell the two prices apart reliably: the expected sales "
+              "difference is small compared with normal week-to-week swings. Consider a bigger price step.",
+        "tr": "{weeks} hafta bile iki fiyatı güvenilir biçimde ayırt etmeye yetmeyebilir: beklenen satış farkı, "
+              "olağan haftalık dalgalanmalara göre küçük. Daha büyük bir fiyat adımı düşünün.",
+        "de": "Selbst {weeks} Wochen reichen womöglich nicht, um die beiden Preise sicher zu unterscheiden: Der "
+              "erwartete Absatzunterschied ist klein im Vergleich zu normalen Wochenschwankungen. Erwägen Sie "
+              "einen größeren Preisschritt.",
     },
     "warn_guardrail_conflict": {
         "en": "The price floor/ceiling lies outside the allowed step from the current price: the max-change "
