@@ -219,7 +219,6 @@ def test_unknown_flag_values_warn_and_count_as_clean():
 
 
 def test_partly_flagged_month_scaled_from_clean_days():
-    # January 2024 has 31 days in the frame? daily_frame uses 30-day months from 2024-01-01: Jan 1..30
     df = flagged_daily({"2024-01-05": "promo", "2024-01-06": "stockout"})
     agg, warnings = aggregate(df)
     jan = agg.iloc[0]

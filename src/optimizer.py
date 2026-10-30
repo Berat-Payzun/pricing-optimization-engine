@@ -13,6 +13,7 @@ Pipeline (Steps refer to the architecture guide):
      price-based fees (commission, payment) come off each unit's revenue.
   9. Guardrails on the recommendation               (recommend): max step, min margin,
      floor/ceiling and price endings
+Model checking: a rolling out-of-sample backtest (backtest).
 """
 
 from __future__ import annotations
@@ -23,7 +24,8 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
-from config import BOOTSTRAP_SAMPLES, PERIOD_MULT, PRICE_GRID_POINTS, SEASONAL_MIN_MONTHS
+from config import (BACKTEST_MIN_MONTHS, BACKTEST_MONTHS, BOOTSTRAP_SAMPLES, PERIOD_MULT, PRICE_GRID_POINTS,
+                    SEASONAL_MIN_MONTHS)
 from translations import Msg
 
 
@@ -42,6 +44,7 @@ class DemandModel:
     # Month-of-year effects (Jan..Dec, mean zero; in log units for log-log) or None. The
     # intercept is for an average month, so the optimizer prices for a typical month.
     season: np.ndarray | None = None
+    resid_sd: float = 0.0  # in-sample SD of monthly quantity residuals (degrees-of-freedom adjusted)
 
     @property
     def has_comp(self) -> bool:
@@ -161,6 +164,7 @@ def fit_demand(agg: pd.DataFrame, kind: str = "linear", seasonal: bool = False) 
     ss_res = float(((q_actual - q_hat) ** 2).sum())
     ss_tot = float(((q_actual - q_actual.mean()) ** 2).sum())
     model.r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0.0
+    model.resid_sd = float(np.sqrt(ss_res / max(len(q_actual) - d.X.shape[1] - 1, 1)))
 
     if model.b >= 0:
         model.warnings.append(Msg("warn_upward_slope"))
@@ -442,6 +446,61 @@ def recommend(model: DemandModel, p: ScenarioParams, result: ScenarioResult, rai
             warnings.append(Msg("warn_guardrail_ending"))
     row = {k: (v.item() if isinstance(v, np.generic) else v) for k, v in row.items()}
     return Recommendation(price=float(row["price"]), row=row, binding=binding, warnings=warnings)
+
+
+@dataclass
+class Backtest:
+    months: pd.DatetimeIndex
+    actual: np.ndarray
+    forecast: np.ndarray
+    naive: np.ndarray  # last month's sales carried forward
+
+    @staticmethod
+    def _wape(actual, forecast) -> float:
+        total = float(np.abs(actual).sum())
+        return float(np.abs(actual - forecast).sum()) / total if total > 0 else float("nan")
+
+    @property
+    def wape(self) -> float:
+        """Weighted absolute % error: Σ|actual − forecast| / Σ actual."""
+        return self._wape(self.actual, self.forecast)
+
+    @property
+    def naive_wape(self) -> float:
+        return self._wape(self.actual, self.naive)
+
+    @property
+    def rmse(self) -> float:
+        return float(np.sqrt(np.mean((self.actual - self.forecast) ** 2)))
+
+    @property
+    def beats_naive(self) -> bool:
+        return self.wape < self.naive_wape
+
+
+def backtest(agg: pd.DataFrame, kind: str, seasonal: bool = False, horizon: int = BACKTEST_MONTHS) -> Backtest | None:
+    """Rolling one-month-ahead backtest: each of the last `horizon` months is forecast by a model
+    fitted only on the months before it, at the price actually charged. The horizon shrinks to
+    BACKTEST_MIN_MONTHS when the earliest training windows are too short to fit; None if even that fails.
+    Short windows fall back to a non-seasonal fit, as fit_demand would have done at the time."""
+    data = agg[~agg["Excluded"].astype(bool)] if "Excluded" in agg else agg
+    price_col = "Real_Price" if "Real_Price" in data else "Price_Charged"
+    comp_col = "Real_Competitor_Price" if "Real_Competitor_Price" in data else (
+        "Competitor_Price" if "Competitor_Price" in data else None
+    )
+    for h in range(min(horizon, len(data) - 1), BACKTEST_MIN_MONTHS - 1, -1):
+        try:
+            forecast = []
+            for i in range(len(data) - h, len(data)):
+                model = fit_demand(data.iloc[:i], kind, seasonal)
+                row = data.iloc[i]
+                comp = float(row[comp_col]) if comp_col and model.has_comp else None
+                forecast.append(float(model.predict(float(row[price_col]), comp, data.index[i].month)))
+        except ValueError:
+            continue
+        q = data["Quantity_Sold"].to_numpy(dtype=float)
+        return Backtest(months=data.index[-h:], actual=q[-h:], forecast=np.array(forecast), naive=q[-h - 1:-1])
+    return None
 
 
 def optimal_price_range(agg: pd.DataFrame, kind: str, params: ScenarioParams, seasonal: bool = False,

@@ -8,7 +8,8 @@ Upload a CSV or Excel file of past prices and quantities. The engine fits a dema
 
 ## Features
 
-- **Demand estimation:** linear OLS or log-log (constant elasticity) regression, with R² shown for both so you can pick the better fit.
+- **Demand estimation:** linear OLS or log-log (constant elasticity) regression.
+- **Backtest:** each of the last 6 months is forecast by a model fitted only on the months before it, at the price actually charged. The headline card shows this out-of-sample error (WAPE) against a naive "same as last month" forecast, for both models, instead of the in-sample R², which flatters the fit. R² is still listed in the model details, next to an actual-vs-forecast chart.
 - **Seasonality (optional):** month-of-year effects in the demand fit, so a seasonal peak isn't mistaken for low price sensitivity. On by default with 24+ months of data.
 - **Today's recommendation vs the 12-month scenario:** the headline price uses today's costs and price level, with no shock. The macro scenario has its own cards and chart below the sliders, in the money of 12 months after the last sales month, so a forecast of inflation is never mistaken for a price rise to make today.
 - **Fees & taxes:** marketplace commission % and payment fee % (charged on the customer-facing price), a "prices include VAT" toggle with the country's standard rate prefilled (TR 20%, DE/Eurozone 19%, FR 20%, IT 22%, ES 21%, UK 20%, US/Brazil/Global 0%), and an extra per-unit cost for shipping or packaging. A **unit economics & tax breakdown** shows where each unit's price goes.
@@ -103,6 +104,8 @@ To add a country, add an entry to `COUNTRY_MAP` and `FALLBACK_MACRO` in `src/con
 | 9. Guardrails | Today's optimum is restricted to `current × (1 ± max change)`, the floor/ceiling and the minimum margin `(P/(1+VAT) − fees − COGS) / (P/(1+VAT))`, then rounded to the better of the price points below and above with the chosen ending. If the floor or ceiling lies outside the max-change band, max change is ignored; if no price in the band reaches the minimum margin, the margin rule is dropped. Both cases are flagged. The 12-month scenario is not restricted. |
 
 For linear demand without a capacity cap, the result matches the closed-form optimum `P* = (a + c·P_comp)/(−2b) + COGS/(2k)` with `k = 1/(1 + VAT) − fee rate` (`k = 1` without VAT or fees; verified in the tests).
+
+**Backtest.** For each of the last 6 fitted months (fewer, down to 3, when early windows are too short), the model is refitted on the earlier months only and predicts that month's sales at its actual price, competitor price and month. Error is WAPE = Σ|actual − forecast| / Σ actual. The naive benchmark predicts each month's sales as the previous month's. Windows shorter than 24 months fit without seasonality, as the app would have at the time.
 
 **90% range.** The months are resampled with replacement 200 times. The demand model is refitted each time and today's P* recomputed (with the same fees, before guardrails). The 5th–95th percentiles form the range.
 

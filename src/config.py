@@ -154,6 +154,10 @@ SEASONAL_MIN_MONTHS = 24
 # Resamples for the bootstrap range of the optimal price.
 BOOTSTRAP_SAMPLES = 200
 
+# Rolling backtest: forecast each of the last N months from the months before it.
+BACKTEST_MONTHS = 6
+BACKTEST_MIN_MONTHS = 3
+
 # Guardrail defaults: the largest price step recommended in one go
 MAX_CHANGE_DEFAULT = 15.0  # %
 

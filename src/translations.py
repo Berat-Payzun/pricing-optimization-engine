@@ -263,6 +263,31 @@ STRINGS: dict[str, dict[str, str]] = {
         "tr": "Modelin açıkladığı aylık satış değişkenliğinin payı.",
         "de": "Anteil der monatlichen Absatzschwankungen, den das Modell erklärt.",
     },
+    "metric_backtest": {"en": "Forecast error (backtest)", "tr": "Tahmin hatası (geriye dönük test)", "de": "Prognosefehler (Backtest)"},
+    "metric_backtest_help": {
+        "en": "Each of the last {n} months was forecast by a model fitted only on the months before it, at the price "
+              "actually charged. The number is the average miss as a share of actual sales (WAPE). Unlike R², it "
+              "measures how well the model predicts months it has not seen.",
+        "tr": "Son {n} ayın her biri, yalnızca kendisinden önceki aylarla kurulan bir modelle, gerçekte uygulanan "
+              "fiyattan tahmin edildi. Sayı, ortalama sapmanın gerçek satışlara oranıdır (WAPE). R²'den farklı olarak "
+              "modelin görmediği ayları ne kadar iyi tahmin ettiğini ölçer.",
+        "de": "Jeder der letzten {n} Monate wurde mit einem Modell prognostiziert, das nur auf den Monaten davor "
+              "geschätzt wurde, zum tatsächlich verlangten Preis. Die Zahl ist die durchschnittliche Abweichung als "
+              "Anteil am tatsächlichen Absatz (WAPE). Anders als R² misst sie, wie gut das Modell ungesehene Monate "
+              "vorhersagt.",
+    },
+    "badge_bt_good": {"en": "Good · naive {naive}", "tr": "İyi · basit tahmin {naive}", "de": "Gut · naiv {naive}"},
+    "badge_bt_ok": {"en": "Fair · naive {naive}", "tr": "Orta · basit tahmin {naive}", "de": "Mittel · naiv {naive}"},
+    "badge_bt_poor": {
+        "en": "No better than last month's sales ({naive})",
+        "tr": "Geçen ayın satışından iyi değil ({naive})",
+        "de": "Nicht besser als der Vormonatsabsatz ({naive})",
+    },
+    "caption_r2_insample": {
+        "en": "In-sample fit: not enough months for a backtest.",
+        "tr": "Örneklem içi uyum: geriye dönük test için yeterli ay yok.",
+        "de": "Anpassung in der Stichprobe: zu wenige Monate für einen Backtest.",
+    },
     "metric_cpi": {"en": "CPI inflation (YoY)", "tr": "TÜFE enflasyonu (yıllık)", "de": "VPI-Inflation (ggü. Vorjahr)"},
     "metric_fx": {"en": "FX ({currency} per USD)", "tr": "Kur (USD başına {currency})", "de": "Wechselkurs ({currency} pro USD)"},
     "metric_fx_delta": {"en": "{pct:+.1f}% 12m", "tr": "{pct:+.1f}% 12 ay", "de": "{pct:+.1f}% 12 Mon."},
@@ -353,6 +378,23 @@ STRINGS: dict[str, dict[str, str]] = {
     "col_model": {"en": "Model", "tr": "Model", "de": "Modell"},
     "col_r2": {"en": "R²", "tr": "R²", "de": "R²"},
     "col_periods": {"en": "Periods used", "tr": "Kullanılan dönem", "de": "Verwendete Perioden"},
+    "col_backtest": {"en": "Backtest error", "tr": "Test hatası", "de": "Backtest-Fehler"},
+    "col_naive": {"en": "Naive error", "tr": "Basit tahmin hatası", "de": "Naiver Fehler"},
+    "col_month": {"en": "Month", "tr": "Ay", "de": "Monat"},
+    "chart_backtest_title": {
+        "en": "Backtest: forecast vs actual, last {n} months (monthly units)",
+        "tr": "Geriye dönük test: tahmin ve gerçekleşen, son {n} ay (aylık adet)",
+        "de": "Backtest: Prognose vs. Ist, letzte {n} Monate (Stück pro Monat)",
+    },
+    "chart_actual": {"en": "Actual", "tr": "Gerçekleşen", "de": "Ist"},
+    "chart_forecast": {"en": "Model forecast", "tr": "Model tahmini", "de": "Modellprognose"},
+    "chart_naive": {"en": "Naive (last month)", "tr": "Basit (geçen ay)", "de": "Naiv (Vormonat)"},
+    "sheet_backtest": {"en": "Backtest", "tr": "Geriye dönük test", "de": "Backtest"},
+    "sum_backtest_value": {
+        "en": "{wape:.1f}% (naive {naive:.1f}%, last {n} months)",
+        "tr": "%{wape:.1f} (basit tahmin %{naive:.1f}, son {n} ay)",
+        "de": "{wape:.1f} % (naiv {naive:.1f} %, letzte {n} Monate)",
+    },
     "col_coef": {"en": "Own-price coef", "tr": "Öz fiyat katsayısı", "de": "Eigenpreis-Koeffizient"},
     "details_ped_current": {
         "en": "Elasticity at current price: **{value}**",

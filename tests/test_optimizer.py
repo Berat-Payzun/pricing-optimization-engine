@@ -385,3 +385,52 @@ def test_excluded_months_are_skipped_by_fit_and_bootstrap():
     assert (m_dirty.b, m_dirty.n) == (pytest.approx(m_clean.b), m_clean.n)
     p = params(m_clean)
     assert optimal_price_range(dirty, "linear", p, seed=1) == optimal_price_range(clean, "linear", p, seed=1)
+
+
+# ---------- rolling backtest ----------
+
+def test_backtest_on_noiseless_data_is_exact_and_beats_naive():
+    from optimizer import backtest
+
+    bt = backtest(synthetic_agg(), "linear")
+    assert len(bt.months) == 6 and bt.months[-1] == synthetic_agg().index[-1]
+    assert bt.wape == pytest.approx(0, abs=1e-9)
+    assert bt.naive_wape > 0.05 and bt.beats_naive
+    assert bt.naive.tolist() == synthetic_agg()["Quantity_Sold"].iloc[-7:-1].tolist()
+
+
+def test_backtest_never_trains_on_the_month_it_forecasts(monkeypatch):
+    import optimizer
+
+    seen = []
+    real_fit = optimizer.fit_demand
+    monkeypatch.setattr(optimizer, "fit_demand", lambda agg, *a, **k: seen.append(agg.index.max()) or real_fit(agg, *a, **k))
+    agg = synthetic_agg(noise=0.05)
+    bt = optimizer.backtest(agg, "linear")
+    assert seen == list(agg.index[-7:-1])  # each fit ends the month before its forecast
+    assert bt.wape > 0
+
+
+def test_backtest_shrinks_horizon_then_gives_up():
+    from optimizer import backtest
+
+    # Linear with competitor needs 4 training months: 8 months leave room for 4 forecasts,
+    # 6 months for only 2, below the 3-month minimum
+    assert len(backtest(synthetic_agg(n=8), "linear").months) == 4
+    assert backtest(synthetic_agg(n=6), "linear") is None
+
+
+def test_backtest_skips_excluded_months():
+    from optimizer import backtest
+
+    agg = synthetic_agg(noise=0.05)
+    agg["Excluded"] = False
+    agg.iloc[-2, agg.columns.get_loc("Excluded")] = True
+    bt = backtest(agg, "linear")
+    assert agg.index[-2] not in bt.months and len(bt.months) == 6
+
+
+def test_fit_reports_residual_sd():
+    noiseless, noisy = fit_demand(synthetic_agg(), "linear"), fit_demand(synthetic_agg(noise=0.05), "linear")
+    assert noiseless.resid_sd == pytest.approx(0, abs=1e-6)
+    assert noisy.resid_sd > 10

@@ -19,8 +19,8 @@ import streamlit as st
 from config import BOOTSTRAP_SAMPLES, COUNTRY_MAP, DEFAULTS, MAX_CHANGE_DEFAULT, PERIOD_MULT, SEASONAL_MIN_MONTHS
 from data_ingestion import PRODUCT, DataValidationError, aggregate, deflate, load_csv
 from macro_api import get_fx, get_inflation
-from optimizer import (ENDINGS, Guardrails, ScenarioParams, elasticities, fit_demand, optimal_price_range, recommend,
-                       run_scenario)
+from optimizer import (ENDINGS, Guardrails, ScenarioParams, backtest, elasticities, fit_demand, optimal_price_range,
+                       recommend, run_scenario)
 from report import Chart, Series, VLine, build_excel, build_pdf
 from translations import LANGUAGES, localize, translate
 
@@ -52,6 +52,11 @@ def cached_fx(country: str):
 @st.cache_data(show_spinner=False)
 def load_rows(raw: bytes, default_cogs: float, drop_duplicates: bool):
     return load_csv(io.BytesIO(raw), default_cogs, drop_duplicates)
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def cached_backtest(agg: pd.DataFrame, kind: str, seasonal: bool):
+    return backtest(agg, kind, seasonal)
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
@@ -190,6 +195,9 @@ for kind in ("linear", "loglog"):
         models[kind] = fit_demand(agg, kind, seasonal)
     except ValueError as e:
         models[kind] = e
+backtests = {kind: None if isinstance(m, Exception) else cached_backtest(agg, kind, seasonal)
+             for kind, m in models.items()}
+bt = backtests[model_kind]
 model = models[model_kind]
 if isinstance(model, Exception):
     st.error(t("err_model", model=t(f"model_{model_kind}"), error=error_text(model)))
@@ -326,7 +334,19 @@ with metrics_area:
               help=t("metric_profit_help", profit=money(today.baseline["profit"], sym)))
     c3.metric(t("metric_ped"), f"{ped_rec:.2f}", help=t("metric_ped_help"))
     with c4:
-        st.metric(t("metric_r2"), f"{model.r2:.2f}", help=t("metric_r2_help"))
+        if bt is not None:
+            # Out-of-sample forecast error replaces the flattering in-sample R²
+            st.metric(t("metric_backtest"), f"{bt.wape * 100:.1f}%", help=t("metric_backtest_help", n=len(bt.months)))
+            naive = f"{bt.naive_wape * 100:.1f}%"
+            if bt.beats_naive and bt.wape < 0.15:
+                st.badge(t("badge_bt_good", naive=naive), icon=":material/check_circle:", color="green")
+            elif bt.beats_naive and bt.wape < 0.30:
+                st.badge(t("badge_bt_ok", naive=naive), icon=":material/info:", color="orange")
+            else:
+                st.badge(t("badge_bt_poor", naive=naive), icon=":material/warning:", color="red")
+        else:
+            st.metric(t("metric_r2"), f"{model.r2:.2f}", help=t("metric_r2_help"))
+            st.caption(t("caption_r2_insample"))
         if model.kind == "loglog" and model.n_dropped:
             st.badge(t("badge_periods_dropped", n_dropped=model.n_dropped, total=model.n + model.n_dropped),
                      icon=":material/warning:", color="orange")
@@ -472,11 +492,13 @@ with st.expander(t("details_expander")):
     with m1:
         st.markdown(f"**{t('details_fitted')}**")
         st.code(model.equation(), language=None)
-        columns = [t("col_model"), t("col_r2"), t("col_periods"), t("col_coef")]
+        columns = [t("col_model"), t("col_backtest"), t("col_naive"), t("col_r2"), t("col_periods"), t("col_coef")]
         model_rows = []
         for kind, m in models.items():
+            b = backtests[kind]
+            errors = (f"{b.wape * 100:.1f}%", f"{b.naive_wape * 100:.1f}%") if b is not None else ("—", "—")
             fit = (None, None, None) if isinstance(m, Exception) else (round(m.r2, 3), m.n, round(m.b, 3))
-            model_rows.append(dict(zip(columns, (t(f"model_{kind}"), *fit))))
+            model_rows.append(dict(zip(columns, (t(f"model_{kind}"), *errors, *fit))))
         model_table = pd.DataFrame(model_rows)
         st.dataframe(model_table, hide_index=True)
         xed_line = t("details_xed", value=f"{xed_rec:.2f}") if xed_rec is not None else t("details_xed_na")
@@ -491,6 +513,17 @@ with st.expander(t("details_expander")):
         else:
             st.markdown(f"- {t('details_no_issues')}")
         st.markdown(f"- {t('details_months', n=len(agg), start=month_year(agg.index.min()), end=month_year(agg.index.max()))}")
+    if bt is not None:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=bt.months, y=bt.actual, name=t("chart_actual"), mode="lines+markers",
+                                 line=dict(color=col["s2"], width=2)))
+        fig.add_trace(go.Scatter(x=bt.months, y=bt.forecast, name=t("chart_forecast"), mode="lines+markers",
+                                 line=dict(color=col["s1"], width=2)))
+        fig.add_trace(go.Scatter(x=bt.months, y=bt.naive, name=t("chart_naive"),
+                                 line=dict(color=col["muted"], width=1.5, dash="dash")))
+        style(fig, t("chart_backtest_title", n=len(bt.months)), "", t("axis_units"), height=320)
+        fig.update_traces(hovertemplate=f"%{{y:,.0f}} {units}")
+        st.plotly_chart(fig, width="stretch")
     st.markdown(f"**{t('details_agg')}**")
     st.dataframe(agg.round(2), width="stretch")
 
@@ -516,6 +549,8 @@ summary = ([(t("product_label"), product)] if product else []) + [
     (t("metric_profit", per=per), money(rec_row["profit"], sym)),
     (t("sum_profit_current", per=per), money(today.baseline["profit"], sym)),
     (t("metric_ped"), f"{ped_rec:.2f}"),
+    (t("metric_backtest"), t("sum_backtest_value", wape=bt.wape * 100, naive=bt.naive_wape * 100, n=len(bt.months))
+     if bt is not None else "—"),
     (t("metric_r2"), f"{model.r2:.2f}"),
     (t("sum_guardrails"), t("sum_guardrails_value", max_change=max_change, min_margin=min_margin,
                             floor=money(price_floor, sym) if price_floor else "—",
@@ -557,6 +592,9 @@ sheets = {
     t("sheet_scenario_curve"): curve_table(result.curve),
     t("sheet_monthly"): agg.round(4).reset_index(),
     t("sheet_models"): model_table,
+    **({t("sheet_backtest"): pd.DataFrame({t("col_month"): bt.months.strftime("%Y-%m"), t("chart_actual"): bt.actual,
+                                           t("chart_forecast"): bt.forecast, t("chart_naive"): bt.naive}).round(2)}
+       if bt is not None else {}),
 }
 notes = list(dict.fromkeys(localize(w, lang) for w in model.warnings + today.warnings + rec.warnings
                            + result.warnings + data_warnings + deflate_warnings))
