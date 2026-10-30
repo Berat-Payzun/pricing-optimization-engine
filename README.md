@@ -17,6 +17,7 @@ Upload a CSV or Excel file of past prices and quantities. The engine fits a dema
 - **Price test plan:** a controlled test that checks the demand estimate. It alternates the current and a test price week by week, so seasons and trends affect both alike. You choose the test price step (10% by default); the app shows the weeks needed for that step, given your sales' normal week-to-week variation, and a chart of how a bigger step shortens the test. The plan lists expected weekly units with 90% bands. Type in actual weekly units and the app says whether customers react as the model expects, or are more or less price-sensitive. The plan is in the Excel export with an empty Actual column.
 - **Uncertainty range:** a bootstrap (200 refits on resampled months) gives a 90% range for the optimal price, shown under the metric and as a band on the chart.
 - **Competitor-aware (optional):** if the CSV has competitor prices, the model estimates the cross-price effect (XED) and enables a competitor-shock slider.
+- **Competitor reaction:** two sliders set how much of your price cuts and of your rises the competitor copies (both 0% by default, the optimistic case). The reaction feeds the recommendation, the scenario and the 90% range, and the headline shows what the price would be without a reaction. The weekly price test keeps the competitor fixed.
 - **Inflation-adjusted history:** historical prices are deflated with the country's CPI before fitting. Without this, in high-inflation economies like Turkey, nominal price rises would be mistaken for real ones.
 - **Live macro data:**
   - CPI from the official FRED API (or the ONS for the UK, the OECD for Brazil)
@@ -106,7 +107,7 @@ To add a country, add an entry to `COUNTRY_MAP` and `FALLBACK_MACRO` in `src/con
 | 1. Aggregation | Raw rows → calendar months (quantity summed, price quantity-weighted). Results are scaled ×1/×3/×12 for the chosen timeframe. |
 | 2. Demand fit | Linear: `Q = a + b·P (+ c·P_comp)`. Log-log: `ln Q = a + b·ln P (+ c·ln P_comp)`. Fitted on real (CPI-deflated) prices. Log-log drops zero-sales months and flags them in the UI. With seasonality on, 11 month dummies are added (January as base). The effects are re-centred to average zero, so the optimizer prices for a typical month. |
 | 3. Elasticities | PED = `b·P/Q` (linear) or `b` (log-log); XED = `c·P_comp/Q` or `c`. |
-| 4. Competitor shock | Demand is re-predicted at `P_comp × (1 + shift)`. |
+| 4. Competitor shock and reaction | Demand is re-predicted at `P_comp × (1 + shift)`. With a reaction, at each candidate price the competitor also copies part of your real price move from today's price: `P_comp × (1 + shift) × (1 + m × (P_real / P_current − 1))`, where `m` is the cut share for cuts and the rise share for rises. Matching rises makes demand look less price-sensitive (your relative price barely moves), so keep the guardrails on when you use it. |
 | 5. Capacity cap | `Q_sold = min(Q_demand × period_mult, capacity)` |
 | 6. FX shock | The imported share follows the exchange rate and US inflation: `share × (1 + fx_shift) × (1 + π_USD)` |
 | 7. Inflation | The rest follows local inflation: `COGS_final = COGS × [share × (1 + fx_shift)(1 + π_USD) + (1 − share)(1 + π)] + Extra × (1 + π)`, `Fixed_final = Fixed_monthly × (1 + π) × period_mult` |

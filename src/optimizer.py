@@ -4,7 +4,7 @@ Pipeline (Steps refer to the architecture guide):
   1. Monthly aggregation + period multiplier       (data_ingestion.aggregate, PERIOD_MULT)
   2. Demand fit: linear or log-log OLS              (fit_demand)
   3. PED / XED                                      (elasticities)
-  4. Competitor price shock                         (run_scenario)
+  4. Competitor price shock and reaction            (run_scenario, _comp_at)
   5. Capacity cap                                   (run_scenario)
   6. FX + USD inflation on the imported COGS share  (shocked_costs)
   7. Local inflation on the rest of COGS and fixed  (shocked_costs)
@@ -63,7 +63,7 @@ class DemandModel:
             return np.maximum(0.0, q)
         log_q = self.intercept + s + self.b * np.log(np.maximum(p, 1e-9))
         if self.has_comp:
-            log_q = log_q + self.c * np.log(max(comp_price, 1e-9))
+            log_q = log_q + self.c * np.log(np.maximum(comp_price, 1e-9))
         return np.exp(log_q)
 
     def equation(self, symbol: str = "") -> str:
@@ -174,6 +174,10 @@ def fit_demand(agg: pd.DataFrame, kind: str = "linear", seasonal: bool = False) 
     return model
 
 
+def _scalar(x):
+    return None if x is None else float(x)
+
+
 def elasticities(model: DemandModel, price: float, comp_price: float | None) -> tuple[float, float | None]:
     """Point price elasticity (PED) and cross-price elasticity (XED)."""
     if model.kind == "loglog":
@@ -209,6 +213,10 @@ class ScenarioParams:
     payment_fee: float = 0.0  # fraction of price
     vat: float = 0.0  # fraction
     extra_unit_cost: float = 0.0  # shipping, packaging etc. per unit, sourced locally
+    # Competitor reaction: the share of our price move (vs today's price, in real terms) that the
+    # competitor copies, separately for cuts and rises (competitors often match cuts, not rises)
+    comp_match_cut: float = 0.0
+    comp_match_rise: float = 0.0
 
     @property
     def fee_rate(self) -> float:
@@ -290,6 +298,17 @@ def _setup(has_comp: bool, p: ScenarioParams) -> _Setup:
     return _Setup(level, comp_real, cogs_final, fixed_final, np.linspace(low, high, PRICE_GRID_POINTS))
 
 
+def _comp_at(p: ScenarioParams, s: _Setup, price) -> np.ndarray | float | None:
+    """Competitor's real price when we charge nominal `price`. With a reaction, it moves by the
+    matched share of our real price change from today's price; without one it stays put."""
+    if s.comp_real is None:
+        return None
+    if not (p.comp_match_cut or p.comp_match_rise):
+        return s.comp_real
+    move = np.asarray(price, dtype=float) / s.level / p.current_price - 1
+    return s.comp_real * (1 + np.where(move < 0, p.comp_match_cut, p.comp_match_rise) * move)
+
+
 def run_scenario(model: DemandModel, p: ScenarioParams) -> ScenarioResult:
     mult = PERIOD_MULT[p.period]
     warnings: list[str] = []
@@ -298,21 +317,22 @@ def run_scenario(model: DemandModel, p: ScenarioParams) -> ScenarioResult:
     level, comp_real, cogs_final, fixed_final, grid = s.level, s.comp_real, s.cogs_final, s.fixed_final, s.grid
     comp_price = comp_real * level if model.has_comp else None
 
-    curve = pd.DataFrame(_economics(model, grid, comp_real, cogs_final, fixed_final, p.capacity, mult, level,
-                                    p.vat, p.fee_rate))
+    curve = pd.DataFrame(_economics(model, grid, _comp_at(p, s, grid), cogs_final, fixed_final, p.capacity, mult,
+                                    level, p.vat, p.fee_rate))
     i = int(curve["profit"].idxmax())
     optimal = curve.iloc[i].to_dict()
     # Baseline keeps today's nominal price, which is a real price cut under pass-through
     baseline = {
         k: float(v)
         for k, v in _economics(
-            model, np.array(p.current_price), comp_real, cogs_final, fixed_final, p.capacity, mult, level,
-            p.vat, p.fee_rate
+            model, np.array(p.current_price), _comp_at(p, s, p.current_price), cogs_final, fixed_final, p.capacity,
+            mult, level, p.vat, p.fee_rate
         ).items()
     }
 
-    ped_opt, xed_opt = elasticities(model, optimal["price"] / level, comp_real)
-    ped_current, _ = elasticities(model, p.current_price / level, comp_real)
+    # Own-price elasticity with the competitor at the level it reacts to (if it reacts)
+    ped_opt, xed_opt = elasticities(model, optimal["price"] / level, _scalar(_comp_at(p, s, optimal["price"])))
+    ped_current, _ = elasticities(model, p.current_price / level, _scalar(_comp_at(p, s, p.current_price)))
 
     profit = curve["profit"].values
     crossings = np.where(np.diff(np.sign(profit)) != 0)[0]
@@ -417,7 +437,8 @@ def recommend(model: DemandModel, p: ScenarioParams, result: ScenarioResult, rai
     mult = PERIOD_MULT[p.period]
 
     def evaluate(prices):
-        econ = _economics(model, np.asarray(prices, dtype=float), s.comp_real, s.cogs_final, s.fixed_final,
+        prices = np.asarray(prices, dtype=float)
+        econ = _economics(model, prices, _comp_at(p, s, prices), s.cogs_final, s.fixed_final,
                           p.capacity, mult, s.level, p.vat, p.fee_rate)
         return [{k: (v[i].item() if isinstance(v, np.ndarray) else v) for k, v in econ.items()}
                 for i in range(len(prices))]
@@ -562,6 +583,7 @@ def test_plan(model: DemandModel, p: ScenarioParams, unconstrained: float, noise
     weekly_cap = p.capacity / PERIOD_MULT[p.period] / WEEKS_PER_MONTH
 
     def weekly(price: float) -> float:  # average month, today's money
+        # Competitor held fixed: nobody reprices week by week to follow an alternating test
         return float(min(model.predict(price / s.level, s.comp_real) / WEEKS_PER_MONTH, weekly_cap))
 
     exp_cur, exp_test = weekly(p.current_price), weekly(test_price)
@@ -666,7 +688,7 @@ def optimal_price_range(agg: pd.DataFrame, kind: str, params: ScenarioParams, se
         x_mean, y_mean = X.mean(axis=0), y.mean()
         coef = np.linalg.lstsq(X - x_mean, y - y_mean, rcond=None)[0]
         model = _model(d, kind, y_mean - x_mean @ coef, coef, [])
-        profit = _economics(model, s.grid, s.comp_real, s.cogs_final, s.fixed_final, params.capacity, mult,
+        profit = _economics(model, s.grid, _comp_at(params, s, s.grid), s.cogs_final, s.fixed_final, params.capacity, mult,
                             s.level, params.vat, params.fee_rate)["profit"]
         prices.append(s.grid[int(np.argmax(profit))])
     if len(prices) < n / 2:

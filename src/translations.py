@@ -567,6 +567,49 @@ STRINGS: dict[str, dict[str, str]] = {
     "limit_min_margin": {"en": "min margin", "tr": "asgari marj", "de": "Mindestmarge"},
     "limit_floor": {"en": "price floor", "tr": "taban fiyat", "de": "Preisuntergrenze"},
     "limit_ceiling": {"en": "price ceiling", "tr": "tavan fiyat", "de": "Preisobergrenze"},
+    # ---------- competitor reaction ----------
+    "reaction_header": {"en": "Competitor reaction", "tr": "Rakip tepkisi", "de": "Reaktion der Konkurrenz"},
+    "match_cut_label": {
+        "en": "Competitor matches your price cuts",
+        "tr": "Rakip fiyat indirimlerinize uyar",
+        "de": "Konkurrenz zieht bei Preissenkungen mit",
+    },
+    "match_cut_help": {
+        "en": "Share of a price cut the competitor copies. 100% = they cut by the same %, so a cut wins fewer "
+              "customers from them. 0% = they ignore it (the default, and the optimistic case).",
+        "tr": "Rakibin bir fiyat indiriminden kopyaladığı pay. %100 = aynı oranda indirir, böylece indirim "
+              "rakipten daha az müşteri kazandırır. %0 = görmezden gelir (varsayılan ve iyimser durum).",
+        "de": "Anteil einer Preissenkung, den die Konkurrenz übernimmt. 100 % = sie senkt um denselben Prozentsatz, "
+              "eine Senkung gewinnt also weniger Kunden. 0 % = sie ignoriert sie (Standard, der optimistische Fall).",
+    },
+    "match_rise_label": {
+        "en": "Competitor matches your price rises",
+        "tr": "Rakip fiyat artışlarınıza uyar",
+        "de": "Konkurrenz zieht bei Preiserhöhungen mit",
+    },
+    "match_rise_help": {
+        "en": "Share of a price rise the competitor copies. Competitors often follow cuts quickly but rises "
+              "rarely, so this is usually lower than the cut setting.",
+        "tr": "Rakibin bir fiyat artışından kopyaladığı pay. Rakipler indirimleri çoğu zaman hızla izler, "
+              "artışları ise nadiren; bu yüzden genellikle indirim ayarından düşüktür.",
+        "de": "Anteil einer Preiserhöhung, den die Konkurrenz übernimmt. Senkungen werden oft schnell "
+              "nachgezogen, Erhöhungen selten – daher meist niedriger als bei Senkungen.",
+    },
+    "reaction_disabled": {
+        "en": "Needs a Competitor_Price column in the data.",
+        "tr": "Veride Competitor_Price sütunu gerekir.",
+        "de": "Erfordert eine Spalte Competitor_Price in den Daten.",
+    },
+    "caption_no_reaction": {
+        "en": "Without a competitor reaction: {price}",
+        "tr": "Rakip tepkisi olmasaydı: {price}",
+        "de": "Ohne Reaktion der Konkurrenz: {price}",
+    },
+    "sum_reaction_value": {
+        "en": "matches {cut}% of cuts, {rise}% of rises",
+        "tr": "indirimlerin %{cut}'ine, artışların %{rise}'ine uyar",
+        "de": "zieht {cut} % der Senkungen und {rise} % der Erhöhungen nach",
+    },
     # ---------- headline recommendation ----------
     "metric_rec_price": {"en": "Recommended price (today)", "tr": "Önerilen fiyat (bugün)", "de": "Empfohlener Preis (heute)"},
     "metric_rec_help": {

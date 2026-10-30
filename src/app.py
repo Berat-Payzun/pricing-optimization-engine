@@ -253,6 +253,15 @@ with st.sidebar:
     ending = st.selectbox(t("ending_label"), ENDINGS, format_func=lambda e: t(f"ending_{e.lstrip('.')}"),
                           help=t("ending_help"), key="ending")
 
+    st.subheader(t("reaction_header"))
+    match_cut = st.slider(t("match_cut_label"), 0, 100, 0, step=5, format="%d%%", help=t("match_cut_help"),
+                          key="comp_match_cut", disabled=not model.has_comp)
+    match_rise = st.slider(t("match_rise_label"), 0, 100, 0, step=5, format="%d%%", help=t("match_rise_help"),
+                           key="comp_match_rise", disabled=not model.has_comp)
+    if not model.has_comp:
+        st.caption(t("reaction_disabled"))
+        match_cut = match_rise = 0
+
 # Live macro values become the slider defaults, refreshed whenever the country changes
 if st.session_state.get("shock_country") != country:
     reset_shocks(infl, fx)
@@ -291,7 +300,8 @@ usd_inflation = inflation / 100 if is_usd else us_infl.value / 100
 common = dict(base_cogs=base_cogs, fixed_monthly=fixed_monthly, capacity=capacity or np.inf, period=timeframe,
               import_share=import_share / 100, base_comp_price=base_comp, current_price=current_price, max_price=max_price,
               commission=commission / 100, payment_fee=payment_fee / 100,
-              vat=vat_rate / 100 if prices_incl_vat else 0.0, extra_unit_cost=extra_cost)
+              vat=vat_rate / 100 if prices_incl_vat else 0.0, extra_unit_cost=extra_cost,
+              comp_match_cut=match_cut / 100, comp_match_rise=match_rise / 100)
 # Headline: today's costs and price level, no shock. Scenario: the sliders, 12 months out.
 today_params = ScenarioParams(**common)
 today = run_scenario(model, today_params)
@@ -302,6 +312,10 @@ result = run_scenario(model, scenario)
 rails = Guardrails(max_change=max_change / 100, min_margin=min_margin / 100, floor=price_floor,
                    ceiling=price_ceiling, ending=ending)
 rec = recommend(model, today_params, today, rails)
+no_reaction = None  # the same recommendation if the competitor didn't react, for comparison
+if match_cut or match_rise:
+    still = ScenarioParams(**{**common, "comp_match_cut": 0.0, "comp_match_rise": 0.0})
+    no_reaction = recommend(model, still, run_scenario(model, still), rails)
 try:
     price_range = cached_range(agg, model_kind, seasonal, asdict(today_params))
 except ValueError:
@@ -338,6 +352,8 @@ with metrics_area:
             st.caption(t("caption_unconstrained", price=money(unconstrained, sym), limits=limits))
         elif abs(rec.price - unconstrained) >= 0.005:
             st.caption(t("caption_unrounded", price=money(unconstrained, sym)))
+        if no_reaction is not None:
+            st.caption(t("caption_no_reaction", price=money(no_reaction.price, sym)))
         if price_range:
             st.caption(t("metric_opt_range", low=money(price_range[0], sym), high=money(price_range[1], sym)),
                        help=t("metric_opt_range_help", n=BOOTSTRAP_SAMPLES))
@@ -634,6 +650,8 @@ summary = ([(t("product_label"), product)] if product else []) + [
                             ending=t(f"ending_{ending.lstrip('.')}"))),
     (t("sum_fees"), t("sum_fees_value", commission=commission, payment=payment_fee, vat=vat_text,
                       extra=money(extra_cost, sym))),
+    (t("reaction_header"), t("sum_reaction_value", cut=match_cut, rise=match_rise)
+     + (f" · {t('caption_no_reaction', price=money(no_reaction.price, sym))}" if no_reaction else "")),
     (t("sum_per_unit"), f"{per_unit} · {t('breakdown_margin')} {money(unit_margin, sym)} "
                         f"({unit_margin / rec.price * 100:.1f}%)"),
     (t("sum_unit_cost"), money(today.cogs_final, sym)),
