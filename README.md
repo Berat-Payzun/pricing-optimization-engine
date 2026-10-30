@@ -33,6 +33,7 @@ Upload a CSV or Excel file of past prices and quantities. The engine fits a dema
 - **Several products per file:** add a `Product` column and pick the product in the sidebar.
 - **Duplicate rows:** exact duplicate rows (common when overlapping exports are combined) are removed with a warning. Turn the option off for transaction logs where identical sales are real.
 - **Export:** download an Excel workbook (summary, today's profit curve, scenario curve, monthly data, models) or a PDF summary with the main chart. Text in the workbook is always stored as text, so a product name like `=HYPERLINK(...)` from an uploaded file can't become a live formula.
+- **Saved scenarios:** "Save scenario" in the sidebar downloads every setting, plus any actual units typed into a running price test, as a small JSON file. "Load scenario" restores it later. The file never contains your sales data, only a fingerprint of it, so the app warns when you load a scenario against a different sales file. Files stay on your computer: Streamlit Cloud's server disk is wiped on restart and shared by all visitors. Loading only parses JSON and checks every value (unknown settings skipped, out-of-range numbers clipped).
 - **Three languages:** English, Turkish and German, switchable from the sidebar without losing inputs.
 
 ## Quick start
@@ -145,6 +146,7 @@ For linear demand without a capacity cap, the result matches the closed-form opt
 │   ├── macro_api.py        # FRED / ONS / OECD / Yahoo fetchers with fallback
 │   ├── optimizer.py        # demand fit (incl. seasonality), elasticities, shock pipeline, solver, bootstrap
 │   ├── report.py           # Excel and PDF export
+│   ├── scenarios.py        # save / load scenarios as JSON
 │   └── translations.py     # UI strings in English, Turkish and German
 └── tests/
 ```

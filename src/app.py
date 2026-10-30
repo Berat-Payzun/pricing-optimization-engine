@@ -5,6 +5,7 @@ Run with:  streamlit run src/app.py
 
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 from dataclasses import asdict
@@ -23,6 +24,7 @@ from data_ingestion import PRODUCT, DataValidationError, aggregate, deflate, loa
 from macro_api import FRED_KEY_ENV, fred_api_key, get_fx, get_inflation, uses_fred
 from optimizer import (ENDINGS, Guardrails, ScenarioParams, backtest, elasticities, evaluate_test, fit_demand,
                        optimal_price_range, recommend, run_scenario, step_tradeoff, test_plan)
+import scenarios
 from report import Chart, Series, VLine, build_excel, build_pdf
 from translations import LANGUAGES, Msg, localize, translate
 
@@ -128,6 +130,23 @@ def reset_shocks(infl, fx):
     st.session_state.shock_comp = 0.0
 
 
+def load_scenario():
+    """Uploader callback: runs before the script, so the widgets below draw with the loaded values."""
+    upload = st.session_state.get("scenario_upload")
+    if upload is None:
+        return
+    ss = st.session_state
+    run_id = ss.get("scenario_status", {}).get("id", 0) + 1
+    try:
+        loaded = scenarios.load(upload.getvalue())
+    except scenarios.ScenarioError as e:
+        ss.scenario_status = {"error": e.args[0], "id": run_id}
+        return
+    for key, value in scenarios.session_updates(loaded, ss.get("country")).items():
+        ss[key] = value
+    ss.scenario_status = {"loaded": loaded, "id": run_id}
+
+
 def macro_badge(v, label: str):
     if v.ok:
         st.badge(f"{label}: {v.source} · {v.as_of or t('badge_live')}", icon=":material/cloud_done:", color="green")
@@ -139,6 +158,11 @@ def macro_badge(v, label: str):
 
 with st.sidebar:
     st.header(t("sidebar_header"))
+    scenario_box = st.expander(t("scen_header"), icon=":material/save:")
+    with scenario_box:
+        save_slot = st.empty()  # the save button is added at the end, once every setting is known
+        st.file_uploader(t("scen_load"), type=["json"], help=t("scen_load_help"), key="scenario_upload",
+                         on_change=load_scenario)
     upload = st.file_uploader(t("upload_label"), type=["csv", "xlsx"], help=t("upload_help"), key="upload")
     if upload is None:
         st.caption(t("sample_caption"))
@@ -178,7 +202,14 @@ try:
     rows, data_warnings = load_rows(raw, default_cogs, drop_dupes)
     if PRODUCT in rows:
         with product_slot:
-            product = st.selectbox(t("product_label"), sorted(rows[PRODUCT].unique()), help=t("product_help"),
+            products = sorted(rows[PRODUCT].unique())
+            pending = st.session_state.pop("_pending_product", None)
+            if pending is not None:
+                if pending in products:
+                    st.session_state.product = pending
+                else:
+                    st.session_state.scenario_status["product_missing"] = pending
+            product = st.selectbox(t("product_label"), products, help=t("product_help"),
                                    key="product")
         rows = rows[rows[PRODUCT] == product].drop(columns=PRODUCT)
     agg, agg_warnings = aggregate(rows)
@@ -186,6 +217,22 @@ try:
 except (DataValidationError, ValueError) as e:
     st.error(t("err_file", error=error_text(e)))
     st.stop()
+
+data_sha = hashlib.sha256(raw).hexdigest()
+scenario_status = st.session_state.get("scenario_status", {})
+with scenario_box:
+    if "error" in scenario_status:
+        st.error(localize(scenario_status["error"], lang))
+    elif "loaded" in scenario_status:
+        loaded = scenario_status["loaded"]
+        st.caption(t("scen_loaded", saved_at=loaded.saved_at[:16].replace("T", " "),
+                     file=loaded.data.get("file_name", "—")))
+        for w in loaded.warnings:
+            st.warning(localize(w, lang))
+        if loaded.data.get("sha256") not in (None, data_sha):
+            st.warning(t("scen_warn_other_file", file=loaded.data.get("file_name", "—")))
+        if "product_missing" in scenario_status:
+            st.warning(t("scen_warn_product", product=scenario_status["product_missing"]))
 
 with st.spinner(t("spinner_macro")):
     infl, fx = cached_inflation(country), cached_fx(country)
@@ -224,9 +271,12 @@ base_cogs = cost_override if cost_override > 0 else float(latest["Cost_Per_Unit"
 base_comp = float(latest["Real_Competitor_Price"]) if model.has_comp else None
 
 with st.sidebar:
+    max_price_key = f"max_price_{model_kind}_{product}_{len(agg)}"
+    if "_pending_max_price" in st.session_state:
+        st.session_state[max_price_key] = st.session_state.pop("_pending_max_price")
     max_price = st.number_input(t("max_price_label", sym=sym), min_value=0.01,
                                 value=float(round(2 * model.p_max, 2)),
-                                key=f"max_price_{model_kind}_{product}_{len(agg)}", help=t("max_price_help"))
+                                key=max_price_key, help=t("max_price_help"))
 
     st.subheader(t("fees_header"))
     commission = st.number_input(t("commission_label"), 0.0, 90.0, 0.0, step=0.5, help=t("commission_help"),
@@ -559,11 +609,20 @@ plan_columns = {"week": t("col_week"), "arm": t("col_arm"), "price": t("col_pric
 plan_table = (plan.schedule.assign(arm=plan.schedule["arm"].map({"test": t("arm_test"), "current": t("arm_current")}))
               .rename(columns=plan_columns).round(2))
 plan_table[t("col_actual")] = None
+# A loaded scenario's actual units come back only if it is the same test (prices and length)
+saved_plan = scenario_status["loaded"].test_plan if "loaded" in scenario_status else None
+restored = scenarios.plan_matches(saved_plan, plan.test_price, current_price, plan.weeks)
+if restored:
+    plan_table[t("col_actual")] = saved_plan["actual"]
+    st.caption(t("scen_plan_restored", n=sum(a is not None for a in saved_plan["actual"])))
+elif saved_plan is not None:
+    st.caption(t("scen_plan_changed"))
 edited = st.data_editor(
     plan_table, hide_index=True, width="stretch", disabled=list(plan_columns.values()),
     column_config={t("col_actual"): st.column_config.NumberColumn(min_value=0.0, step=1.0)},
     # A new plan (product, model or prices changed) starts with an empty Actual column
-    key=f"test_plan_{product}_{model_kind}_{plan.test_price:.2f}_{current_price:.2f}_{plan.weeks}",
+    key=f"test_plan_{product}_{model_kind}_{plan.test_price:.2f}_{current_price:.2f}_{plan.weeks}"
+        f"_{scenario_status.get('id', 0) if restored else 0}",
 )
 test_result = evaluate_test(plan, edited[t("col_actual")])
 if test_result is None:
@@ -727,3 +786,26 @@ e2.download_button(t("export_pdf"), data=partial(build_pdf, title, subtitle, sum
 st.divider()
 # Required by the FRED API terms of use (kept in English, as worded by the St. Louis Fed)
 st.caption("This product uses the FRED® API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.")
+
+# ---------- save scenario (drawn in the sidebar's scenario box) ----------
+
+actual_units = pd.to_numeric(edited[t("col_actual")], errors="coerce")
+current_settings = dict(
+    drop_dupes=drop_dupes, country=country, timeframe=timeframe, default_cogs=default_cogs,
+    cost_override=cost_override, fixed_monthly=fixed_monthly, capacity=capacity, import_share=import_share,
+    model_kind=model_kind, use_real=use_real, use_season=seasonal, product=product, max_price=max_price,
+    commission=commission, payment_fee=payment_fee, prices_incl_vat=prices_incl_vat, vat_rate=vat_rate,
+    extra_unit_cost=extra_cost, max_change=max_change, min_margin=min_margin, price_floor=price_floor,
+    price_ceiling=price_ceiling, ending=ending,
+    # The sliders' own values: match_cut/rise are forced to 0 when the data has no competitor column
+    comp_match_cut=st.session_state.get("comp_match_cut", 0), comp_match_rise=st.session_state.get("comp_match_rise", 0),
+    shock_infl=inflation, shock_fx=fx_shift, shock_comp=comp_shift, shock_passthrough=passthrough, test_step=test_step,
+)
+saved_test = ({"test_price": plan.test_price, "current_price": current_price, "weeks": plan.weeks,
+               "actual": [None if pd.isna(a) else float(a) for a in actual_units]}
+              if actual_units.notna().any() else None)
+data_meta = {"sha256": data_sha, "file_name": upload.name if upload is not None else SAMPLE_PATH.name,
+             "product": product}
+save_slot.download_button(t("scen_save"), data=partial(scenarios.dump, current_settings, saved_test, data_meta),
+                          file_name=f"scenario_{stem.removeprefix('pricing_')}.json", mime="application/json",
+                          on_click="ignore", width="stretch", icon=":material/download:", help=t("scen_save_help"))
