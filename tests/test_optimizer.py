@@ -524,3 +524,55 @@ def test_verdict_codes():
     v = verdict(plan, both_shift=0.3 * plan.expected_current)  # season shift hits both arms
     assert v.code == "consistent" and v.level_ratio > 1.2
     assert verdict(plan).elasticity_observed == pytest.approx(verdict(plan).elasticity_model)
+
+
+# ---------- competitor reaction ----------
+
+def test_zero_reaction_changes_nothing():
+    m = fit_demand(synthetic_agg(noise=0.05), "linear")
+    plain, explicit = run_scenario(m, params(m)), run_scenario(m, params(m, comp_match_cut=0.0, comp_match_rise=0.0))
+    pd.testing.assert_frame_equal(plain.curve, explicit.curve)
+
+
+def test_matching_rises_lifts_the_optimum_above_current():
+    m = fit_demand(synthetic_agg(), "linear")
+    base = run_scenario(m, params(m, current_price=35.0))  # optimum ≈ 42, a rise
+    matched = run_scenario(m, params(m, current_price=35.0, comp_match_rise=1.0))
+    cuts_only = run_scenario(m, params(m, current_price=35.0, comp_match_cut=1.0))
+    assert base.optimal["price"] > 35.0
+    assert matched.optimal["price"] > base.optimal["price"]  # a rise is followed, so it costs fewer sales
+    assert cuts_only.optimal["price"] == base.optimal["price"]  # cut-matching is irrelevant to a rise
+    assert matched.baseline["profit"] == pytest.approx(base.baseline["profit"])  # current price: no move to react to
+
+
+def test_matching_cuts_makes_cuts_less_attractive():
+    m = fit_demand(synthetic_agg(), "linear")
+    base = run_scenario(m, params(m, current_price=55.0))  # optimum ≈ 42, a cut
+    matched = run_scenario(m, params(m, current_price=55.0, comp_match_cut=0.8))
+    assert base.optimal["price"] < 55.0 and matched.optimal["price"] > base.optimal["price"]
+
+
+def test_full_match_follows_the_rule():
+    from optimizer import _comp_at, _setup
+
+    m = fit_demand(synthetic_agg(), "linear")
+    p = params(m, current_price=40.0, comp_match_cut=0.5, comp_match_rise=0.25)
+    s = _setup(True, p)
+    assert _comp_at(p, s, np.array([30.0, 40.0, 50.0])).tolist() == pytest.approx(
+        [50.0 * (1 - 0.5 * 0.25), 50.0, 50.0 * (1 + 0.25 * 0.25)])
+
+
+def test_reaction_works_for_loglog_and_flows_into_range_recommend_and_not_test_plan():
+    import optimizer
+
+    agg = synthetic_agg("loglog", noise=0.03)
+    m = fit_demand(agg, "loglog")
+    p0, p1 = params(m, max_price=200.0), params(m, max_price=200.0, comp_match_cut=1.0, comp_match_rise=1.0)
+    r0, r1 = run_scenario(m, p0), run_scenario(m, p1)
+    assert np.isfinite(r1.curve["profit"]).all() and r1.optimal["price"] != r0.optimal["price"]
+    rails = optimizer.Guardrails(max_change=0)
+    assert optimizer.recommend(m, p1, r1, rails).price == r1.optimal["price"]
+    assert optimizer.optimal_price_range(agg, "loglog", p1, seed=2) != optimizer.optimal_price_range(agg, "loglog", p0, seed=2)
+    t0 = optimizer.test_plan(m, p0, 50.0, 5.0, rails)
+    t1 = optimizer.test_plan(m, p1, 50.0, 5.0, rails)
+    assert (t1.expected_test, t1.expected_current) == (t0.expected_test, t0.expected_current)

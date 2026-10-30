@@ -17,9 +17,10 @@ Upload a CSV or Excel file of past prices and quantities. The engine fits a dema
 - **Price test plan:** a controlled test that checks the demand estimate. It alternates the current and a test price week by week, so seasons and trends affect both alike. You choose the test price step (10% by default); the app shows the weeks needed for that step, given your sales' normal week-to-week variation, and a chart of how a bigger step shortens the test. The plan lists expected weekly units with 90% bands. Type in actual weekly units and the app says whether customers react as the model expects, or are more or less price-sensitive. The plan is in the Excel export with an empty Actual column.
 - **Uncertainty range:** a bootstrap (200 refits on resampled months) gives a 90% range for the optimal price, shown under the metric and as a band on the chart.
 - **Competitor-aware (optional):** if the CSV has competitor prices, the model estimates the cross-price effect (XED) and enables a competitor-shock slider.
+- **Competitor reaction:** two sliders set how much of your price cuts and of your rises the competitor copies (both 0% by default, the optimistic case). The reaction feeds the recommendation, the scenario and the 90% range, and the headline shows what the price would be without a reaction. The weekly price test keeps the competitor fixed.
 - **Inflation-adjusted history:** historical prices are deflated with the country's CPI before fitting. Without this, in high-inflation economies like Turkey, nominal price rises would be mistaken for real ones.
 - **Live macro data:**
-  - CPI from FRED (or the ONS for the UK)
+  - CPI from the official FRED API (or the ONS for the UK, the OECD for Brazil)
   - FX from Yahoo Finance, with FRED as the fallback
   - Results cached for 6 hours. If a source is offline, the app falls back to built-in defaults and shows a badge.
 - **Shock simulation:**
@@ -32,6 +33,7 @@ Upload a CSV or Excel file of past prices and quantities. The engine fits a dema
 - **Several products per file:** add a `Product` column and pick the product in the sidebar.
 - **Duplicate rows:** exact duplicate rows (common when overlapping exports are combined) are removed with a warning. Turn the option off for transaction logs where identical sales are real.
 - **Export:** download an Excel workbook (summary, today's profit curve, scenario curve, monthly data, models) or a PDF summary with the main chart. Text in the workbook is always stored as text, so a product name like `=HYPERLINK(...)` from an uploaded file can't become a live formula.
+- **Saved scenarios:** "Save scenario" in the sidebar downloads every setting, plus any actual units typed into a running price test, as a small JSON file. "Load scenario" restores it later. The file never contains your sales data, only a fingerprint of it, so the app warns when you load a scenario against a different sales file. Files stay on your computer: Streamlit Cloud's server disk is wiped on restart and shared by all visitors. Loading only parses JSON and checks every value (unknown settings skipped, out-of-range numbers clipped).
 - **Three languages:** English, Turkish and German, switchable from the sidebar without losing inputs.
 
 ## Quick start
@@ -44,6 +46,16 @@ streamlit run src/app.py
 ```
 
 `requirements.txt` pins exact versions. To upgrade, bump a version, run `pytest`, then commit.
+
+### FRED API key
+
+Most inflation data comes from FRED, which needs a free API key:
+
+1. Create an account at https://fredaccount.stlouisfed.org/ and request a key at https://fredaccount.stlouisfed.org/apikeys.
+2. **Locally:** create `.streamlit/secrets.toml` (already in `.gitignore`) with one line, `FRED_API_KEY = "your-key"`. An environment variable `FRED_API_KEY` works too.
+3. **Streamlit Community Cloud:** open the app's ⋮ menu, then **Settings → Secrets**, and paste the same line.
+
+Without a key the app still runs: FRED series fall back to built-in values, and a data note says so. The tests never use a real key.
 
 The app opens with `sample_data.csv` loaded. You can regenerate it with `python scripts/generate_sample_data.py`; its true demand is `Q/day = 120 − 2·P + 1·P_comp`. Run the tests with `pytest`.
 
@@ -84,8 +96,8 @@ Column names are matched case-insensitively, ignoring accents, spaces and dashes
 - The OECD MEI monthly CPI series (`…CPIALLMINMEI`) stopped updating in 2025, so they are only fallbacks. Eurostat HICP, ONS and the OECD's live SDMX API are used first.
 - Eurozone is the euro-area average. Pick a specific country for its own inflation; all euro countries share the same EUR/USD rate.
 - The global series is an annual inflation rate. It is converted to a monthly index (each year centred on 1 July, log-linear in between). Because it lags by about a year, the most recent months are not inflation-adjusted, and the app says so in the data notes.
-- FRED blocks plain Python HTTP clients, so requests go through `curl_cffi` with browser impersonation and a browser User-Agent.
-- No API keys are needed.
+- FRED is read through its official API (`api.stlouisfed.org`) with your key (see Quick start). The key is sent only to FRED and is never shown in errors or logs. ONS and OECD need no key.
+- This product uses the FRED® API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.
 
 To add a country, add an entry to `COUNTRY_MAP` and `FALLBACK_MACRO` in `src/config.py`.
 
@@ -96,7 +108,7 @@ To add a country, add an entry to `COUNTRY_MAP` and `FALLBACK_MACRO` in `src/con
 | 1. Aggregation | Raw rows → calendar months (quantity summed, price quantity-weighted). Results are scaled ×1/×3/×12 for the chosen timeframe. |
 | 2. Demand fit | Linear: `Q = a + b·P (+ c·P_comp)`. Log-log: `ln Q = a + b·ln P (+ c·ln P_comp)`. Fitted on real (CPI-deflated) prices. Log-log drops zero-sales months and flags them in the UI. With seasonality on, 11 month dummies are added (January as base). The effects are re-centred to average zero, so the optimizer prices for a typical month. |
 | 3. Elasticities | PED = `b·P/Q` (linear) or `b` (log-log); XED = `c·P_comp/Q` or `c`. |
-| 4. Competitor shock | Demand is re-predicted at `P_comp × (1 + shift)`. |
+| 4. Competitor shock and reaction | Demand is re-predicted at `P_comp × (1 + shift)`. With a reaction, at each candidate price the competitor also copies part of your real price move from today's price: `P_comp × (1 + shift) × (1 + m × (P_real / P_current − 1))`, where `m` is the cut share for cuts and the rise share for rises. Matching rises makes demand look less price-sensitive (your relative price barely moves), so keep the guardrails on when you use it. |
 | 5. Capacity cap | `Q_sold = min(Q_demand × period_mult, capacity)` |
 | 6. FX shock | The imported share follows the exchange rate and US inflation: `share × (1 + fx_shift) × (1 + π_USD)` |
 | 7. Inflation | The rest follows local inflation: `COGS_final = COGS × [share × (1 + fx_shift)(1 + π_USD) + (1 − share)(1 + π)] + Extra × (1 + π)`, `Fixed_final = Fixed_monthly × (1 + π) × period_mult` |
@@ -134,6 +146,7 @@ For linear demand without a capacity cap, the result matches the closed-form opt
 │   ├── macro_api.py        # FRED / ONS / OECD / Yahoo fetchers with fallback
 │   ├── optimizer.py        # demand fit (incl. seasonality), elasticities, shock pipeline, solver, bootstrap
 │   ├── report.py           # Excel and PDF export
+│   ├── scenarios.py        # save / load scenarios as JSON
 │   └── translations.py     # UI strings in English, Turkish and German
 └── tests/
 ```

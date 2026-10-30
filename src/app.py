@@ -5,7 +5,9 @@ Run with:  streamlit run src/app.py
 
 from __future__ import annotations
 
+import hashlib
 import io
+import os
 from dataclasses import asdict
 from datetime import date
 from functools import partial
@@ -19,11 +21,12 @@ import streamlit as st
 from config import (BOOTSTRAP_SAMPLES, COUNTRY_MAP, DEFAULTS, MAX_CHANGE_DEFAULT, PERIOD_MULT, SEASONAL_MIN_MONTHS,
                     TEST_DEFAULT_STEP, TEST_MAX_WEEKS, TEST_STEP_CHOICES)
 from data_ingestion import PRODUCT, DataValidationError, aggregate, deflate, load_csv
-from macro_api import get_fx, get_inflation
+from macro_api import FRED_KEY_ENV, fred_api_key, get_fx, get_inflation, uses_fred
 from optimizer import (ENDINGS, Guardrails, ScenarioParams, backtest, elasticities, evaluate_test, fit_demand,
                        optimal_price_range, recommend, run_scenario, step_tradeoff, test_plan)
+import scenarios
 from report import Chart, Series, VLine, build_excel, build_pdf
-from translations import LANGUAGES, localize, translate
+from translations import LANGUAGES, Msg, localize, translate
 
 SAMPLE_PATH = Path(__file__).resolve().parents[1] / "sample_data.csv"
 
@@ -36,6 +39,14 @@ PALETTE = {
 }
 
 st.set_page_config(page_title="Pricing Optimization Engine", page_icon="📈", layout="wide")
+
+# FRED API key: Streamlit secrets (.streamlit/secrets.toml locally, Settings → Secrets on
+# Streamlit Cloud) are copied to the environment, where macro_api looks for it.
+try:
+    if FRED_KEY_ENV in st.secrets:
+        os.environ.setdefault(FRED_KEY_ENV, str(st.secrets[FRED_KEY_ENV]))
+except Exception:  # no secrets file at all: an environment variable may still be set
+    pass
 
 
 # ---------- cached data access ----------
@@ -119,6 +130,23 @@ def reset_shocks(infl, fx):
     st.session_state.shock_comp = 0.0
 
 
+def load_scenario():
+    """Uploader callback: runs before the script, so the widgets below draw with the loaded values."""
+    upload = st.session_state.get("scenario_upload")
+    if upload is None:
+        return
+    ss = st.session_state
+    run_id = ss.get("scenario_status", {}).get("id", 0) + 1
+    try:
+        loaded = scenarios.load(upload.getvalue())
+    except scenarios.ScenarioError as e:
+        ss.scenario_status = {"error": e.args[0], "id": run_id}
+        return
+    for key, value in scenarios.session_updates(loaded, ss.get("country")).items():
+        ss[key] = value
+    ss.scenario_status = {"loaded": loaded, "id": run_id}
+
+
 def macro_badge(v, label: str):
     if v.ok:
         st.badge(f"{label}: {v.source} · {v.as_of or t('badge_live')}", icon=":material/cloud_done:", color="green")
@@ -130,6 +158,11 @@ def macro_badge(v, label: str):
 
 with st.sidebar:
     st.header(t("sidebar_header"))
+    scenario_box = st.expander(t("scen_header"), icon=":material/save:")
+    with scenario_box:
+        save_slot = st.empty()  # the save button is added at the end, once every setting is known
+        st.file_uploader(t("scen_load"), type=["json"], help=t("scen_load_help"), key="scenario_upload",
+                         on_change=load_scenario)
     upload = st.file_uploader(t("upload_label"), type=["csv", "xlsx"], help=t("upload_help"), key="upload")
     if upload is None:
         st.caption(t("sample_caption"))
@@ -169,7 +202,14 @@ try:
     rows, data_warnings = load_rows(raw, default_cogs, drop_dupes)
     if PRODUCT in rows:
         with product_slot:
-            product = st.selectbox(t("product_label"), sorted(rows[PRODUCT].unique()), help=t("product_help"),
+            products = sorted(rows[PRODUCT].unique())
+            pending = st.session_state.pop("_pending_product", None)
+            if pending is not None:
+                if pending in products:
+                    st.session_state.product = pending
+                else:
+                    st.session_state.scenario_status["product_missing"] = pending
+            product = st.selectbox(t("product_label"), products, help=t("product_help"),
                                    key="product")
         rows = rows[rows[PRODUCT] == product].drop(columns=PRODUCT)
     agg, agg_warnings = aggregate(rows)
@@ -178,6 +218,22 @@ except (DataValidationError, ValueError) as e:
     st.error(t("err_file", error=error_text(e)))
     st.stop()
 
+data_sha = hashlib.sha256(raw).hexdigest()
+scenario_status = st.session_state.get("scenario_status", {})
+with scenario_box:
+    if "error" in scenario_status:
+        st.error(localize(scenario_status["error"], lang))
+    elif "loaded" in scenario_status:
+        loaded = scenario_status["loaded"]
+        st.caption(t("scen_loaded", saved_at=loaded.saved_at[:16].replace("T", " "),
+                     file=loaded.data.get("file_name", "—")))
+        for w in loaded.warnings:
+            st.warning(localize(w, lang))
+        if loaded.data.get("sha256") not in (None, data_sha):
+            st.warning(t("scen_warn_other_file", file=loaded.data.get("file_name", "—")))
+        if "product_missing" in scenario_status:
+            st.warning(t("scen_warn_product", product=scenario_status["product_missing"]))
+
 with st.spinner(t("spinner_macro")):
     infl, fx = cached_inflation(country), cached_fx(country)
     us_infl = infl if country == "US" else cached_inflation("US")
@@ -185,6 +241,8 @@ with st.spinner(t("spinner_macro")):
 agg, deflate_warnings = deflate(agg, infl.series if use_real else None)
 if not use_real:
     deflate_warnings = []
+if fred_api_key() is None and uses_fred(country):
+    deflate_warnings.append(Msg("warn_fred_no_key"))
 
 with st.sidebar:
     seasonal = st.toggle(t("season_label"), value=len(agg) >= SEASONAL_MIN_MONTHS,
@@ -213,9 +271,12 @@ base_cogs = cost_override if cost_override > 0 else float(latest["Cost_Per_Unit"
 base_comp = float(latest["Real_Competitor_Price"]) if model.has_comp else None
 
 with st.sidebar:
+    max_price_key = f"max_price_{model_kind}_{product}_{len(agg)}"
+    if "_pending_max_price" in st.session_state:
+        st.session_state[max_price_key] = st.session_state.pop("_pending_max_price")
     max_price = st.number_input(t("max_price_label", sym=sym), min_value=0.01,
                                 value=float(round(2 * model.p_max, 2)),
-                                key=f"max_price_{model_kind}_{product}_{len(agg)}", help=t("max_price_help"))
+                                key=max_price_key, help=t("max_price_help"))
 
     st.subheader(t("fees_header"))
     commission = st.number_input(t("commission_label"), 0.0, 90.0, 0.0, step=0.5, help=t("commission_help"),
@@ -241,6 +302,15 @@ with st.sidebar:
                                     help=t("floor_ceiling_help"), key="price_ceiling")
     ending = st.selectbox(t("ending_label"), ENDINGS, format_func=lambda e: t(f"ending_{e.lstrip('.')}"),
                           help=t("ending_help"), key="ending")
+
+    st.subheader(t("reaction_header"))
+    match_cut = st.slider(t("match_cut_label"), 0, 100, 0, step=5, format="%d%%", help=t("match_cut_help"),
+                          key="comp_match_cut", disabled=not model.has_comp)
+    match_rise = st.slider(t("match_rise_label"), 0, 100, 0, step=5, format="%d%%", help=t("match_rise_help"),
+                           key="comp_match_rise", disabled=not model.has_comp)
+    if not model.has_comp:
+        st.caption(t("reaction_disabled"))
+        match_cut = match_rise = 0
 
 # Live macro values become the slider defaults, refreshed whenever the country changes
 if st.session_state.get("shock_country") != country:
@@ -280,7 +350,8 @@ usd_inflation = inflation / 100 if is_usd else us_infl.value / 100
 common = dict(base_cogs=base_cogs, fixed_monthly=fixed_monthly, capacity=capacity or np.inf, period=timeframe,
               import_share=import_share / 100, base_comp_price=base_comp, current_price=current_price, max_price=max_price,
               commission=commission / 100, payment_fee=payment_fee / 100,
-              vat=vat_rate / 100 if prices_incl_vat else 0.0, extra_unit_cost=extra_cost)
+              vat=vat_rate / 100 if prices_incl_vat else 0.0, extra_unit_cost=extra_cost,
+              comp_match_cut=match_cut / 100, comp_match_rise=match_rise / 100)
 # Headline: today's costs and price level, no shock. Scenario: the sliders, 12 months out.
 today_params = ScenarioParams(**common)
 today = run_scenario(model, today_params)
@@ -291,6 +362,10 @@ result = run_scenario(model, scenario)
 rails = Guardrails(max_change=max_change / 100, min_margin=min_margin / 100, floor=price_floor,
                    ceiling=price_ceiling, ending=ending)
 rec = recommend(model, today_params, today, rails)
+no_reaction = None  # the same recommendation if the competitor didn't react, for comparison
+if match_cut or match_rise:
+    still = ScenarioParams(**{**common, "comp_match_cut": 0.0, "comp_match_rise": 0.0})
+    no_reaction = recommend(model, still, run_scenario(model, still), rails)
 try:
     price_range = cached_range(agg, model_kind, seasonal, asdict(today_params))
 except ValueError:
@@ -327,6 +402,8 @@ with metrics_area:
             st.caption(t("caption_unconstrained", price=money(unconstrained, sym), limits=limits))
         elif abs(rec.price - unconstrained) >= 0.005:
             st.caption(t("caption_unrounded", price=money(unconstrained, sym)))
+        if no_reaction is not None:
+            st.caption(t("caption_no_reaction", price=money(no_reaction.price, sym)))
         if price_range:
             st.caption(t("metric_opt_range", low=money(price_range[0], sym), high=money(price_range[1], sym)),
                        help=t("metric_opt_range_help", n=BOOTSTRAP_SAMPLES))
@@ -532,11 +609,20 @@ plan_columns = {"week": t("col_week"), "arm": t("col_arm"), "price": t("col_pric
 plan_table = (plan.schedule.assign(arm=plan.schedule["arm"].map({"test": t("arm_test"), "current": t("arm_current")}))
               .rename(columns=plan_columns).round(2))
 plan_table[t("col_actual")] = None
+# A loaded scenario's actual units come back only if it is the same test (prices and length)
+saved_plan = scenario_status["loaded"].test_plan if "loaded" in scenario_status else None
+restored = scenarios.plan_matches(saved_plan, plan.test_price, current_price, plan.weeks)
+if restored:
+    plan_table[t("col_actual")] = saved_plan["actual"]
+    st.caption(t("scen_plan_restored", n=sum(a is not None for a in saved_plan["actual"])))
+elif saved_plan is not None:
+    st.caption(t("scen_plan_changed"))
 edited = st.data_editor(
     plan_table, hide_index=True, width="stretch", disabled=list(plan_columns.values()),
     column_config={t("col_actual"): st.column_config.NumberColumn(min_value=0.0, step=1.0)},
     # A new plan (product, model or prices changed) starts with an empty Actual column
-    key=f"test_plan_{product}_{model_kind}_{plan.test_price:.2f}_{current_price:.2f}_{plan.weeks}",
+    key=f"test_plan_{product}_{model_kind}_{plan.test_price:.2f}_{current_price:.2f}_{plan.weeks}"
+        f"_{scenario_status.get('id', 0) if restored else 0}",
 )
 test_result = evaluate_test(plan, edited[t("col_actual")])
 if test_result is None:
@@ -623,6 +709,8 @@ summary = ([(t("product_label"), product)] if product else []) + [
                             ending=t(f"ending_{ending.lstrip('.')}"))),
     (t("sum_fees"), t("sum_fees_value", commission=commission, payment=payment_fee, vat=vat_text,
                       extra=money(extra_cost, sym))),
+    (t("reaction_header"), t("sum_reaction_value", cut=match_cut, rise=match_rise)
+     + (f" · {t('caption_no_reaction', price=money(no_reaction.price, sym))}" if no_reaction else "")),
     (t("sum_per_unit"), f"{per_unit} · {t('breakdown_margin')} {money(unit_margin, sym)} "
                         f"({unit_margin / rec.price * 100:.1f}%)"),
     (t("sum_unit_cost"), money(today.cogs_final, sym)),
@@ -694,3 +782,30 @@ e2.download_button(t("export_pdf"), data=partial(build_pdf, title, subtitle, sum
                                                  t("pdf_footer", date=f"{date.today():%Y-%m-%d}")),
                    file_name=f"{stem}.pdf", mime="application/pdf",
                    on_click="ignore", width="stretch", icon=":material/picture_as_pdf:")
+
+st.divider()
+# Required by the FRED API terms of use (kept in English, as worded by the St. Louis Fed)
+st.caption("This product uses the FRED® API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.")
+
+# ---------- save scenario (drawn in the sidebar's scenario box) ----------
+
+actual_units = pd.to_numeric(edited[t("col_actual")], errors="coerce")
+current_settings = dict(
+    drop_dupes=drop_dupes, country=country, timeframe=timeframe, default_cogs=default_cogs,
+    cost_override=cost_override, fixed_monthly=fixed_monthly, capacity=capacity, import_share=import_share,
+    model_kind=model_kind, use_real=use_real, use_season=seasonal, product=product, max_price=max_price,
+    commission=commission, payment_fee=payment_fee, prices_incl_vat=prices_incl_vat, vat_rate=vat_rate,
+    extra_unit_cost=extra_cost, max_change=max_change, min_margin=min_margin, price_floor=price_floor,
+    price_ceiling=price_ceiling, ending=ending,
+    # The sliders' own values: match_cut/rise are forced to 0 when the data has no competitor column
+    comp_match_cut=st.session_state.get("comp_match_cut", 0), comp_match_rise=st.session_state.get("comp_match_rise", 0),
+    shock_infl=inflation, shock_fx=fx_shift, shock_comp=comp_shift, shock_passthrough=passthrough, test_step=test_step,
+)
+saved_test = ({"test_price": plan.test_price, "current_price": current_price, "weeks": plan.weeks,
+               "actual": [None if pd.isna(a) else float(a) for a in actual_units]}
+              if actual_units.notna().any() else None)
+data_meta = {"sha256": data_sha, "file_name": upload.name if upload is not None else SAMPLE_PATH.name,
+             "product": product}
+save_slot.download_button(t("scen_save"), data=partial(scenarios.dump, current_settings, saved_test, data_meta),
+                          file_name=f"scenario_{stem.removeprefix('pricing_')}.json", mime="application/json",
+                          on_click="ignore", width="stretch", icon=":material/download:", help=t("scen_save_help"))

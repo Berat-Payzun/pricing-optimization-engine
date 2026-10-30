@@ -480,6 +480,85 @@ STRINGS: dict[str, dict[str, str]] = {
         "tr": "{date} tarihinde Fiyat Optimizasyon Motoru ile oluşturuldu",
         "de": "Erstellt am {date} mit der Preisoptimierungs-Engine",
     },
+    # ---------- saved scenarios ----------
+    "scen_header": {"en": "Scenario: save / load", "tr": "Senaryo: kaydet / yükle", "de": "Szenario: speichern / laden"},
+    "scen_save": {"en": "Save scenario", "tr": "Senaryoyu kaydet", "de": "Szenario speichern"},
+    "scen_save_help": {
+        "en": "Downloads your current settings, and any actual units typed into the price test, as a small JSON "
+              "file. Your sales data is not included.",
+        "tr": "Mevcut ayarlarınızı ve fiyat testine girdiğiniz gerçekleşen adetleri küçük bir JSON dosyası olarak "
+              "indirir. Satış verileriniz dahil edilmez.",
+        "de": "Lädt Ihre aktuellen Einstellungen und die im Preistest eingetragenen Ist-Stückzahlen als kleine "
+              "JSON-Datei herunter. Ihre Verkaufsdaten sind nicht enthalten.",
+    },
+    "scen_load": {"en": "Load scenario (.json)", "tr": "Senaryo yükle (.json)", "de": "Szenario laden (.json)"},
+    "scen_load_help": {
+        "en": "Restores the settings from a file saved with 'Save scenario'. Upload the matching sales file too.",
+        "tr": "'Senaryoyu kaydet' ile kaydedilen dosyadaki ayarları geri yükler. İlgili satış dosyasını da yükleyin.",
+        "de": "Stellt die Einstellungen aus einer mit „Szenario speichern“ gesicherten Datei wieder her. Laden Sie "
+              "auch die passende Verkaufsdatei hoch.",
+    },
+    "scen_loaded": {
+        "en": "Loaded scenario saved {saved_at} for {file}.",
+        "tr": "{file} için {saved_at} tarihinde kaydedilen senaryo yüklendi.",
+        "de": "Szenario vom {saved_at} für {file} geladen.",
+    },
+    "scen_err_invalid": {
+        "en": "This file is not valid JSON, so no settings were changed.",
+        "tr": "Bu dosya geçerli bir JSON değil; hiçbir ayar değiştirilmedi.",
+        "de": "Diese Datei ist kein gültiges JSON; es wurden keine Einstellungen geändert.",
+    },
+    "scen_err_not_ours": {
+        "en": "This JSON file is not a scenario saved by this app, so no settings were changed.",
+        "tr": "Bu JSON dosyası bu uygulamayla kaydedilmiş bir senaryo değil; hiçbir ayar değiştirilmedi.",
+        "de": "Diese JSON-Datei ist kein mit dieser App gespeichertes Szenario; es wurden keine Einstellungen "
+              "geändert.",
+    },
+    "scen_warn_newer": {
+        "en": "Saved by a newer version of the app: settings it doesn't know were skipped.",
+        "tr": "Uygulamanın daha yeni bir sürümüyle kaydedilmiş: tanınmayan ayarlar atlandı.",
+        "de": "Mit einer neueren App-Version gespeichert: Unbekannte Einstellungen wurden übersprungen.",
+    },
+    "scen_warn_dropped": {
+        "en": "Skipped unknown or invalid settings: {keys}.",
+        "tr": "Bilinmeyen veya geçersiz ayarlar atlandı: {keys}.",
+        "de": "Unbekannte oder ungültige Einstellungen übersprungen: {keys}.",
+    },
+    "scen_warn_clipped": {
+        "en": "Brought into the allowed range: {keys}.",
+        "tr": "İzin verilen aralığa çekildi: {keys}.",
+        "de": "In den erlaubten Bereich gebracht: {keys}.",
+    },
+    "scen_warn_plan_invalid": {
+        "en": "The saved price test was damaged and was not restored.",
+        "tr": "Kaydedilen fiyat testi bozuk olduğu için geri yüklenmedi.",
+        "de": "Der gespeicherte Preistest war beschädigt und wurde nicht wiederhergestellt.",
+    },
+    "scen_warn_other_file": {
+        "en": "This scenario was saved with a different sales file ({file}). Results can differ; upload that "
+              "file to reproduce them.",
+        "tr": "Bu senaryo farklı bir satış dosyasıyla kaydedildi ({file}). Sonuçlar farklı olabilir; aynı "
+              "sonuçlar için o dosyayı yükleyin.",
+        "de": "Dieses Szenario wurde mit einer anderen Verkaufsdatei gespeichert ({file}). Die Ergebnisse können "
+              "abweichen; laden Sie diese Datei hoch, um sie nachzubilden.",
+    },
+    "scen_warn_product": {
+        "en": "The saved product '{product}' is not in this file, so the product was not changed.",
+        "tr": "Kaydedilen '{product}' ürünü bu dosyada yok; ürün değiştirilmedi.",
+        "de": "Das gespeicherte Produkt „{product}“ ist nicht in dieser Datei; das Produkt wurde nicht geändert.",
+    },
+    "scen_plan_restored": {
+        "en": "Restored {n} week(s) of actual units from the saved scenario.",
+        "tr": "Kaydedilen senaryodan {n} haftalık gerçekleşen adet geri yüklendi.",
+        "de": "{n} Woche(n) mit Ist-Stückzahlen aus dem gespeicherten Szenario wiederhergestellt.",
+    },
+    "scen_plan_changed": {
+        "en": "The saved price test used different prices or length, so its actual units were not restored here.",
+        "tr": "Kaydedilen fiyat testi farklı fiyatlar veya süre kullanıyordu; gerçekleşen adetleri burada geri "
+              "yüklenmedi.",
+        "de": "Der gespeicherte Preistest hatte andere Preise oder eine andere Dauer; seine Ist-Stückzahlen wurden "
+              "hier nicht wiederhergestellt.",
+    },
     # ---------- duplicates ----------
     "dupes_label": {"en": "Remove duplicate rows", "tr": "Tekrarlanan satırları kaldır", "de": "Doppelte Zeilen entfernen"},
     "dupes_help": {
@@ -567,6 +646,49 @@ STRINGS: dict[str, dict[str, str]] = {
     "limit_min_margin": {"en": "min margin", "tr": "asgari marj", "de": "Mindestmarge"},
     "limit_floor": {"en": "price floor", "tr": "taban fiyat", "de": "Preisuntergrenze"},
     "limit_ceiling": {"en": "price ceiling", "tr": "tavan fiyat", "de": "Preisobergrenze"},
+    # ---------- competitor reaction ----------
+    "reaction_header": {"en": "Competitor reaction", "tr": "Rakip tepkisi", "de": "Reaktion der Konkurrenz"},
+    "match_cut_label": {
+        "en": "Competitor matches your price cuts",
+        "tr": "Rakip fiyat indirimlerinize uyar",
+        "de": "Konkurrenz zieht bei Preissenkungen mit",
+    },
+    "match_cut_help": {
+        "en": "Share of a price cut the competitor copies. 100% = they cut by the same %, so a cut wins fewer "
+              "customers from them. 0% = they ignore it (the default, and the optimistic case).",
+        "tr": "Rakibin bir fiyat indiriminden kopyaladığı pay. %100 = aynı oranda indirir, böylece indirim "
+              "rakipten daha az müşteri kazandırır. %0 = görmezden gelir (varsayılan ve iyimser durum).",
+        "de": "Anteil einer Preissenkung, den die Konkurrenz übernimmt. 100 % = sie senkt um denselben Prozentsatz, "
+              "eine Senkung gewinnt also weniger Kunden. 0 % = sie ignoriert sie (Standard, der optimistische Fall).",
+    },
+    "match_rise_label": {
+        "en": "Competitor matches your price rises",
+        "tr": "Rakip fiyat artışlarınıza uyar",
+        "de": "Konkurrenz zieht bei Preiserhöhungen mit",
+    },
+    "match_rise_help": {
+        "en": "Share of a price rise the competitor copies. Competitors often follow cuts quickly but rises "
+              "rarely, so this is usually lower than the cut setting.",
+        "tr": "Rakibin bir fiyat artışından kopyaladığı pay. Rakipler indirimleri çoğu zaman hızla izler, "
+              "artışları ise nadiren; bu yüzden genellikle indirim ayarından düşüktür.",
+        "de": "Anteil einer Preiserhöhung, den die Konkurrenz übernimmt. Senkungen werden oft schnell "
+              "nachgezogen, Erhöhungen selten – daher meist niedriger als bei Senkungen.",
+    },
+    "reaction_disabled": {
+        "en": "Needs a Competitor_Price column in the data.",
+        "tr": "Veride Competitor_Price sütunu gerekir.",
+        "de": "Erfordert eine Spalte Competitor_Price in den Daten.",
+    },
+    "caption_no_reaction": {
+        "en": "Without a competitor reaction: {price}",
+        "tr": "Rakip tepkisi olmasaydı: {price}",
+        "de": "Ohne Reaktion der Konkurrenz: {price}",
+    },
+    "sum_reaction_value": {
+        "en": "matches {cut}% of cuts, {rise}% of rises",
+        "tr": "indirimlerin %{cut}'ine, artışların %{rise}'ine uyar",
+        "de": "zieht {cut} % der Senkungen und {rise} % der Erhöhungen nach",
+    },
     # ---------- headline recommendation ----------
     "metric_rec_price": {"en": "Recommended price (today)", "tr": "Önerilen fiyat (bugün)", "de": "Empfohlener Preis (heute)"},
     "metric_rec_help": {
@@ -917,6 +1039,14 @@ STRINGS: dict[str, dict[str, str]] = {
         "en": "{n} exact duplicate row(s) kept and counted as separate sales.",
         "tr": "{n} birebir tekrarlanan satır korundu ve ayrı satışlar olarak sayıldı.",
         "de": "{n} exakt doppelte Zeile(n) beibehalten und als separate Verkäufe gezählt.",
+    },
+    "warn_fred_no_key": {
+        "en": "No FRED API key is set, so FRED inflation/exchange-rate data was not fetched and built-in values "
+              "are used. Add FRED_API_KEY to the app's secrets (see README).",
+        "tr": "FRED API anahtarı tanımlı değil; FRED enflasyon/kur verisi alınamadı ve yerleşik değerler "
+              "kullanılıyor. Uygulamanın gizli ayarlarına FRED_API_KEY ekleyin (README'ye bakın).",
+        "de": "Kein FRED-API-Schlüssel gesetzt: FRED-Inflations-/Wechselkursdaten wurden nicht abgerufen, es "
+              "gelten eingebaute Werte. FRED_API_KEY in den Secrets der App hinterlegen (siehe README).",
     },
     "warn_flag_unknown": {
         "en": "Unrecognised Flag value(s) treated as normal sales: {values}. Use 'stockout' or 'promo'.",
