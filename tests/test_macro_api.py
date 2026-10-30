@@ -2,26 +2,34 @@ import pandas as pd
 import pytest
 
 import macro_api
-from macro_api import (BROWSER_HEADERS, fx_from_series, get_fx, get_inflation, parse_fred_csv, parse_oecd_csv,
-                       parse_ons_months, rate_to_index, yoy_inflation)
+from macro_api import (fx_from_series, get_fx, get_inflation, parse_fred_json, parse_oecd_csv, parse_ons_months,
+                       rate_to_index, yoy_inflation)
 
-FRED_CSV = """observation_date,CPIAUCSL
-2024-01-01,100.0
-2024-02-01,.
-2024-03-01,102.0
-2025-01-01,105.0
-2025-03-01,107.1
-"""
+TEST_KEY = "0123456789abcdef0123456789abcdef"
 
 
-def test_parse_fred_csv_skips_missing_dots():
-    s = parse_fred_csv(FRED_CSV)
+def fred_json(rows):
+    return {"observations": [{"date": d, "value": v} for d, v in rows]}
+
+
+FRED_JSON = fred_json([("2024-01-01", "100.0"), ("2024-02-01", "."), ("2024-03-01", "102.0"),
+                       ("2025-01-01", "105.0"), ("2025-03-01", "107.1")])
+
+
+@pytest.fixture(autouse=True)
+def no_real_fred_key(monkeypatch):
+    """Tests never use a developer's real key or reach the real API."""
+    monkeypatch.delenv("FRED_API_KEY", raising=False)
+
+
+def test_parse_fred_json_skips_missing_dots():
+    s = parse_fred_json(FRED_JSON, "CPIAUCSL")
     assert len(s) == 4
-    assert s.index[0] == pd.Timestamp("2024-01-01")
+    assert s.index[0] == pd.Timestamp("2024-01-01") and s.name == "CPIAUCSL"
 
 
 def test_yoy_inflation():
-    s = parse_fred_csv(FRED_CSV)
+    s = parse_fred_json(FRED_JSON, "CPIAUCSL")
     assert yoy_inflation(s) == pytest.approx(5.0)  # 107.1 / 102.0
 
 
@@ -40,25 +48,64 @@ def test_fx_inversion_and_change():
 
 
 class FakeResp:
-    def __init__(self, text):
-        self.text = text
+    def __init__(self, text="", status_code=200, payload=None):
+        self.text, self.status_code, self.payload = text, status_code, payload
 
     def raise_for_status(self):
         pass
 
+    def json(self):
+        return self.payload
 
-def test_fred_request_sends_browser_user_agent(monkeypatch):
-    captured = {}
 
-    def fake_get(url, params=None, headers=None, **kw):
-        captured["headers"] = headers
-        return FakeResp(FRED_CSV)
+def fake_fred(monkeypatch, payload=None, status_code=200):
+    """Route requests.get (used only by the FRED API client) to a canned response."""
+    import requests
 
-    import curl_cffi.requests as cffi_requests
-    monkeypatch.setattr(cffi_requests, "get", fake_get)
-    macro_api.fetch_fred_series("CPIAUCSL")
-    assert captured["headers"]["User-Agent"].startswith("Mozilla/5.0")
-    assert captured["headers"] is BROWSER_HEADERS
+    calls = []
+
+    def fake_get(url, params=None, **kw):
+        calls.append((url, params))
+        return FakeResp(status_code=status_code, payload=payload)
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    return calls
+
+
+def test_fred_uses_official_api_with_key(monkeypatch):
+    monkeypatch.setenv("FRED_API_KEY", TEST_KEY)
+    calls = fake_fred(monkeypatch, FRED_JSON)
+    s = macro_api.fetch_fred_series("CPIAUCSL")
+    (url, params), = calls
+    assert url == "https://api.stlouisfed.org/fred/series/observations"
+    assert params == {"series_id": "CPIAUCSL", "api_key": TEST_KEY, "file_type": "json"}
+    assert len(s) == 4
+
+
+def test_no_key_means_no_request_and_fallback(monkeypatch):
+    calls = fake_fred(monkeypatch, FRED_JSON)
+    v = get_inflation("US")
+    assert calls == [] and not v.ok and v.source == "fallback default"
+    assert macro_api.uses_fred("US") and macro_api.uses_fred("GB")  # GB: CPI from ONS, FX fallback on FRED
+
+
+@pytest.mark.parametrize("failure", ["http", "network"])
+def test_fred_errors_never_contain_the_key(monkeypatch, failure):
+    import requests
+
+    monkeypatch.setenv("FRED_API_KEY", TEST_KEY)
+    if failure == "http":
+        fake_fred(monkeypatch, {"error_message": "Bad Request"}, status_code=400)
+    else:
+        def down(url, params=None, **kw):  # requests puts the full URL, key included, in its message
+            raise requests.ConnectionError(f"Max retries exceeded with url: {url}?api_key={params['api_key']}")
+        monkeypatch.setattr(requests, "get", down)
+    with pytest.raises(ValueError) as err:
+        macro_api.fetch_fred_series("CPIAUCSL")
+    assert TEST_KEY not in str(err.value)
+    # No original exception (with the URL) can surface in a traceback
+    assert err.value.__cause__ is None and (err.value.__context__ is None or err.value.__suppress_context__)
+    assert not get_inflation("US").ok
 
 
 def test_inflation_falls_back_when_network_down(monkeypatch):
@@ -98,16 +145,11 @@ def test_parse_oecd_csv_sorts_by_date():
     assert yoy_inflation(s) == pytest.approx(5.0)  # 178.5 / 170.0
 
 
-WORLD_CSV = """observation_date,FPCPITOTLZGWLD
-2022-01-01,8.0
-2023-01-01,5.0
-2024-01-01,3.0
-2025-01-01,4.0
-"""
+WORLD_JSON = fred_json([("2022-01-01", "8.0"), ("2023-01-01", "5.0"), ("2024-01-01", "3.0"), ("2025-01-01", "4.0")])
 
 
 def test_rate_to_index_is_monthly_and_keeps_annual_rates():
-    idx = rate_to_index(parse_fred_csv(WORLD_CSV))
+    idx = rate_to_index(parse_fred_json(WORLD_JSON, "FPCPITOTLZGWLD"))
     assert idx.index[0] == pd.Timestamp("2022-07-01") and idx.index[-1] == pd.Timestamp("2025-07-01")
     assert len(idx) == 37 and idx.index.freqstr == "MS"
     assert yoy_inflation(idx) == pytest.approx(4.0)
@@ -117,10 +159,11 @@ def test_rate_to_index_is_monthly_and_keeps_annual_rates():
 
 
 def test_world_inflation_from_annual_rates(monkeypatch):
-    monkeypatch.setattr(macro_api, "http_get", lambda *a, **kw: FakeResp(WORLD_CSV))
+    monkeypatch.setenv("FRED_API_KEY", TEST_KEY)
+    fake_fred(monkeypatch, WORLD_JSON)
     v = get_inflation("WORLD")
     assert v.ok and v.value == pytest.approx(4.0)
-    assert v.as_of == "2025" and v.source == "FRED FPCPITOTLZGWLD"
+    assert v.as_of == "2025" and v.source == "FRED API FPCPITOTLZGWLD"
 
 
 def test_brazil_uses_oecd_first(monkeypatch):

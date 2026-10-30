@@ -918,6 +918,14 @@ STRINGS: dict[str, dict[str, str]] = {
         "tr": "{n} birebir tekrarlanan satır korundu ve ayrı satışlar olarak sayıldı.",
         "de": "{n} exakt doppelte Zeile(n) beibehalten und als separate Verkäufe gezählt.",
     },
+    "warn_fred_no_key": {
+        "en": "No FRED API key is set, so FRED inflation/exchange-rate data was not fetched and built-in values "
+              "are used. Add FRED_API_KEY to the app's secrets (see README).",
+        "tr": "FRED API anahtarı tanımlı değil; FRED enflasyon/kur verisi alınamadı ve yerleşik değerler "
+              "kullanılıyor. Uygulamanın gizli ayarlarına FRED_API_KEY ekleyin (README'ye bakın).",
+        "de": "Kein FRED-API-Schlüssel gesetzt: FRED-Inflations-/Wechselkursdaten wurden nicht abgerufen, es "
+              "gelten eingebaute Werte. FRED_API_KEY in den Secrets der App hinterlegen (siehe README).",
+    },
     "warn_flag_unknown": {
         "en": "Unrecognised Flag value(s) treated as normal sales: {values}. Use 'stockout' or 'promo'.",
         "tr": "Tanınmayan Flag değer(ler)i normal satış sayıldı: {values}. 'stok yok' veya 'kampanya' kullanın.",

@@ -3,15 +3,19 @@
 Every public function returns a MacroValue and never raises, so the UI can fall back
 to manual inputs when a source is offline.
 
-FRED's bot protection blocks plain Python HTTP clients based on their TLS fingerprint,
-even with a browser User-Agent. Requests therefore go through `curl_cffi` (already a
-yfinance dependency) impersonating Chrome, and send browser headers as well. Plain
-`requests` with the same headers is the fallback.
+FRED is read through its official API with the key in the FRED_API_KEY environment
+variable (the app copies it there from Streamlit secrets). Without a key FRED series are
+not fetched and the built-in fallback values are used. The key travels in the request URL,
+so FRED errors are re-raised without the original exception and never show it.
+
+ONS and OECD requests go through `curl_cffi` (already a yfinance dependency) with browser
+headers, falling back to plain `requests`.
 """
 
 from __future__ import annotations
 
 import io
+import os
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -19,7 +23,8 @@ import pandas as pd
 
 from config import COUNTRY_MAP, FALLBACK_MACRO
 
-FRED_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+FRED_API_URL = "https://api.stlouisfed.org/fred/series/observations"
+FRED_KEY_ENV = "FRED_API_KEY"
 ONS_URL = "https://www.ons.gov.uk/economy/inflationandpriceindices/timeseries/{}/data"
 OECD_URL = "https://sdmx.oecd.org/public/rest/data/OECD.SDD.TPS,DSD_PRICES@DF_PRICES_ALL,1.0/{}"
 TIMEOUT = 20
@@ -60,19 +65,37 @@ def http_get(url: str, params: dict | None = None):
     return resp
 
 
+def fred_api_key() -> str | None:
+    return os.environ.get(FRED_KEY_ENV, "").strip() or None
+
+
+class FredKeyMissing(ValueError):
+    pass
+
+
 def fetch_fred_series(series_id: str) -> pd.Series:
-    resp = http_get(FRED_CSV_URL, params={"id": series_id})
-    if not resp.text.startswith("observation_date") and not resp.text.startswith("DATE"):
-        raise ValueError(f"FRED returned non-CSV content for {series_id}")
-    return parse_fred_csv(resp.text)
+    import requests
+
+    key = fred_api_key()
+    if key is None:
+        raise FredKeyMissing("No FRED API key configured")
+    params = {"series_id": series_id, "api_key": key, "file_type": "json"}
+    try:
+        resp = requests.get(FRED_API_URL, params=params, timeout=TIMEOUT)
+    except requests.RequestException as e:
+        # The exception text holds the URL, and the URL holds the key: drop it
+        raise ValueError(f"FRED API unreachable for {series_id} ({type(e).__name__})") from None
+    if resp.status_code != 200:
+        raise ValueError(f"FRED API HTTP {resp.status_code} for {series_id}")
+    return parse_fred_json(resp.json(), series_id)
 
 
-def parse_fred_csv(text: str) -> pd.Series:
-    df = pd.read_csv(io.StringIO(text))
+def parse_fred_json(data: dict, name: str) -> pd.Series:
+    obs = data["observations"]
     s = pd.Series(
-        pd.to_numeric(df.iloc[:, 1], errors="coerce").values,  # FRED marks gaps with "."
-        index=pd.to_datetime(df.iloc[:, 0]),
-        name=df.columns[1],
+        pd.to_numeric([o["value"] for o in obs], errors="coerce"),  # FRED marks gaps with "."
+        index=pd.to_datetime([o["date"] for o in obs]),
+        name=name,
     )
     return s.dropna()
 
@@ -125,6 +148,12 @@ CPI_FETCHERS = {
     "fred_rate": lambda series_id: rate_to_index(fetch_fred_series(series_id)),
 }
 ANNUAL_PROVIDERS = {"fred_rate"}
+SOURCE_LABELS = {"fred": "FRED API", "fred_rate": "FRED API", "ons": "ONS", "oecd": "OECD"}
+
+
+def uses_fred(country: str) -> bool:
+    cfg = COUNTRY_MAP[country]
+    return any(provider.startswith("fred") for provider, _ in cfg["cpi_sources"]) or bool(cfg["fx_fred"])
 
 
 def yoy_inflation(cpi: pd.Series) -> float:
@@ -144,7 +173,7 @@ def get_inflation(country: str) -> MacroValue:
             return MacroValue(
                 value=yoy_inflation(cpi),
                 as_of=cpi.index[-1].strftime("%Y" if annual else "%Y-%m"),
-                source=f"{provider.split('_')[0].upper()} {series_id}",
+                source=f"{SOURCE_LABELS[provider]} {series_id}",
                 ok=True,
                 series=cpi,
             )
@@ -187,7 +216,7 @@ def get_fx(country: str) -> MacroValue:
     if cfg["fx_yahoo"]:
         attempts.append((f"Yahoo {cfg['fx_yahoo']}", lambda: fetch_yahoo_fx(cfg["fx_yahoo"])))
     if cfg["fx_fred"]:
-        attempts.append((f"FRED {cfg['fx_fred']}", lambda: fetch_fred_series(cfg["fx_fred"])))
+        attempts.append((f"FRED API {cfg['fx_fred']}", lambda: fetch_fred_series(cfg["fx_fred"])))
 
     for source, fetch in attempts:
         try:

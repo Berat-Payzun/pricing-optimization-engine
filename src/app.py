@@ -6,6 +6,7 @@ Run with:  streamlit run src/app.py
 from __future__ import annotations
 
 import io
+import os
 from dataclasses import asdict
 from datetime import date
 from functools import partial
@@ -19,11 +20,11 @@ import streamlit as st
 from config import (BOOTSTRAP_SAMPLES, COUNTRY_MAP, DEFAULTS, MAX_CHANGE_DEFAULT, PERIOD_MULT, SEASONAL_MIN_MONTHS,
                     TEST_DEFAULT_STEP, TEST_MAX_WEEKS, TEST_STEP_CHOICES)
 from data_ingestion import PRODUCT, DataValidationError, aggregate, deflate, load_csv
-from macro_api import get_fx, get_inflation
+from macro_api import FRED_KEY_ENV, fred_api_key, get_fx, get_inflation, uses_fred
 from optimizer import (ENDINGS, Guardrails, ScenarioParams, backtest, elasticities, evaluate_test, fit_demand,
                        optimal_price_range, recommend, run_scenario, step_tradeoff, test_plan)
 from report import Chart, Series, VLine, build_excel, build_pdf
-from translations import LANGUAGES, localize, translate
+from translations import LANGUAGES, Msg, localize, translate
 
 SAMPLE_PATH = Path(__file__).resolve().parents[1] / "sample_data.csv"
 
@@ -36,6 +37,14 @@ PALETTE = {
 }
 
 st.set_page_config(page_title="Pricing Optimization Engine", page_icon="📈", layout="wide")
+
+# FRED API key: Streamlit secrets (.streamlit/secrets.toml locally, Settings → Secrets on
+# Streamlit Cloud) are copied to the environment, where macro_api looks for it.
+try:
+    if FRED_KEY_ENV in st.secrets:
+        os.environ.setdefault(FRED_KEY_ENV, str(st.secrets[FRED_KEY_ENV]))
+except Exception:  # no secrets file at all: an environment variable may still be set
+    pass
 
 
 # ---------- cached data access ----------
@@ -185,6 +194,8 @@ with st.spinner(t("spinner_macro")):
 agg, deflate_warnings = deflate(agg, infl.series if use_real else None)
 if not use_real:
     deflate_warnings = []
+if fred_api_key() is None and uses_fred(country):
+    deflate_warnings.append(Msg("warn_fred_no_key"))
 
 with st.sidebar:
     seasonal = st.toggle(t("season_label"), value=len(agg) >= SEASONAL_MIN_MONTHS,
@@ -694,3 +705,7 @@ e2.download_button(t("export_pdf"), data=partial(build_pdf, title, subtitle, sum
                                                  t("pdf_footer", date=f"{date.today():%Y-%m-%d}")),
                    file_name=f"{stem}.pdf", mime="application/pdf",
                    on_click="ignore", width="stretch", icon=":material/picture_as_pdf:")
+
+st.divider()
+# Required by the FRED API terms of use (kept in English, as worded by the St. Louis Fed)
+st.caption("This product uses the FRED® API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.")
