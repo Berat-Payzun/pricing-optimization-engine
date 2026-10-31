@@ -39,6 +39,7 @@ def test_all_keys_used_in_source_exist():
     used |= {f"country_{c}" for c in COUNTRY_MAP}
     used |= {f"{prefix}_{p}" for prefix in ("timeframe", "per") for p in ("Monthly", "Quarterly", "Annual")}
     used |= {"model_linear", "model_loglog"}
+    used |= {f"pf_status_{s}" for s in ("ok", "no_optimum", "no_profit")}
     for module in ("data_ingestion.py", "optimizer.py"):
         used |= set(re.findall(r"""Msg\(\s*["']([a-z0-9_]+)["']""", (SRC / module).read_text(encoding="utf-8")))
     assert used, "regex found no keys"

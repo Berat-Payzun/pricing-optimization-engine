@@ -728,3 +728,48 @@ def test_sensitivity_inflation_is_percentage_points_and_skipped_when_inert():
     assert s.loc["inflation", "price_high"] == pytest.approx(float(expected))
     # fully imported COGS, no extra unit cost, no pass-through: inflation only hits fixed costs
     assert sensitivity(m, params(m, import_share=1.0), factors=("inflation",)).empty
+
+
+# ---------- phase 4 audit: no-profit state, bottom edge, Auto and upward slopes ----------
+
+def test_no_price_covering_variable_costs_is_not_viable():
+    m = fit_demand(synthetic_agg(), "linear")
+    # 90% fees inside a VAT-inclusive price (net share 1/1.2 ≈ 83%): every unit loses money
+    r = run_scenario(m, params(m, fee_rate=0.9, vat=0.2))
+    assert not r.viable and r.optimal["q_sold"] == 0
+    assert "warn_loss_only" not in [w.key for w in r.warnings]  # the red card says it instead
+    # cost above every price customers would pay
+    assert not run_scenario(m, params(m, base_cogs=500.0)).viable
+    # fixed costs alone don't make a scenario non-viable: sales still cover their own costs
+    big_fixed = run_scenario(m, params(m, fixed_monthly=1e9))
+    assert big_fixed.viable and "warn_loss_only" in [w.key for w in big_fixed.warnings]
+
+
+def test_optimum_at_the_bottom_of_the_grid_is_no_optimum():
+    m = fit_demand(synthetic_agg("loglog"), "loglog")  # elastic (-2.5): with no cost, revenue rises as price falls
+    r = run_scenario(m, params(m, base_cogs=0.0))
+    assert r.edge == "low" and not r.interior and r.optimal["price"] == r.curve["price"].min()
+    normal = run_scenario(m, params(m))
+    assert normal.edge is None and normal.interior and normal.viable
+
+
+def test_equation_keeps_small_slopes_readable():
+    m = DemandModel("linear", 120.0, -0.0015, None, 0.9, 12, 0, 40000.0, 60000.0)
+    assert "-0.0015·P" in m.equation()
+    assert "-2.000·P" in DemandModel("linear", 120.0, -2.0, None, 0.9, 12, 0, 1.0, 2.0).equation()
+
+
+def test_auto_skips_demand_that_rises_with_price():
+    from optimizer import Backtest, best_model
+
+    def model(b, r2=0.9):
+        return DemandModel("linear", 100.0, b, None, r2, 24, 0, 10.0, 20.0)
+
+    def bt(err):
+        months = pd.date_range("2024-01-01", periods=2, freq="MS")
+        return Backtest(months, np.array([100.0, 100.0]), np.array([100.0 - err, 100.0 + err]), np.array([90.0, 90.0]))
+
+    # upward-sloping linear fits perfectly, but log-log is the one that can be priced
+    assert best_model({"linear": model(4.5), "loglog": model(-1.5)}, {"linear": bt(0.0), "loglog": bt(20.0)}) == "loglog"
+    # both slope upward: the old rule (lowest error) still picks one
+    assert best_model({"linear": model(4.5), "loglog": model(1.5)}, {"linear": bt(0.0), "loglog": bt(20.0)}) == "linear"

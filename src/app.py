@@ -345,6 +345,9 @@ with st.sidebar:
                                help=t("vat_help"), key=f"vat_{country}", disabled=not prices_incl_vat)
     extra_cost = st.number_input(t("extra_cost_label", sym=sym), min_value=0.0, value=0.0, help=t("extra_cost_help"),
                                  key="extra_unit_cost")
+    net_share = 1 / (1 + (vat_rate / 100 if prices_incl_vat else 0.0))  # net-of-VAT share of the price
+    if fee_pct / 100 >= net_share:
+        st.warning(t("warn_fees_exceed_price", fees=fee_pct, net=net_share * 100), icon=":material/warning:")
 
     st.subheader(t("rails_header"))
     max_change = st.number_input(t("max_change_label"), 0.0, 100.0, MAX_CHANGE_DEFAULT, step=1.0,
@@ -431,7 +434,13 @@ try:
     boot = cached_bootstrap(agg, model_kind, seasonal, use_trend, asdict(today_params), rec.price)
 except ValueError:
     boot = None
-price_range = boot.price if boot is not None and today.interior and not rec.binding else None
+# Why today's result is no real optimum, if it isn't: nothing covers the variable costs, or profit
+# still rises at an edge of the tested prices
+blocker = (t("err_no_profit") if not today.viable
+           else t("err_no_interior", max=money(max_price, sym)) if today.edge == "high"
+           else t("err_no_interior_low", min=money(float(today.curve["price"].min()), sym)) if today.edge == "low"
+           else None)
+price_range = boot.price if boot is not None and blocker is None and not rec.binding else None
 
 opt, rec_row = result.optimal, rec.row
 unconstrained = today.optimal["price"]
@@ -473,7 +482,7 @@ with metrics_area:
               help=t("metric_profit_help", profit=money(today.baseline["profit"], sym)))
     with c3:
         st.metric(t("metric_ped"), num(ped_rec), help=t("metric_ped_help"))
-        if boot is not None and boot.ped is not None:
+        if boot is not None and boot.ped is not None and today.viable:
             st.caption(t("metric_ped_ci", low=num(boot.ped[0]), high=num(boot.ped[1])),
                        help=t("metric_ped_ci_help", n=BOOTSTRAP_SAMPLES))
             conf = boot.ped_confidence
@@ -505,8 +514,8 @@ with metrics_area:
                   delta_color="inverse")
         macro_badge(fx, t("badge_fx"))
 
-    if not today.interior:
-        st.error(t("err_no_interior", max=money(max_price, sym)), icon=":material/block:")
+    if blocker:
+        st.error(blocker, icon=":material/block:")
     for w in dict.fromkeys(model.warnings + today.warnings + rec.warnings):
         st.warning(localize(w, lang), icon=":material/warning:")
 
@@ -540,7 +549,7 @@ with metrics_area, st.expander(t("breakdown_expander")):
 
 # ---------- sensitivity (tornado) ----------
 
-sens = sensitivity(model, today_params) if today.interior else None
+sens = sensitivity(model, today_params) if blocker is None else None
 with metrics_area, st.expander(t("sens_expander"), icon=":material/tune:"):
     if sens is None or sens.empty:
         st.caption(t("sens_na"))
@@ -581,7 +590,7 @@ if all_rows is not None:
         t("pf_col_ped"): [num(v) for v in pf["ped"]],
         t("pf_col_uplift", per=per): [money(v, sym) if pd.notna(v) else "—" for v in pf["uplift"]],
         t("pf_col_wape"): [num(v * 100, ".1f", "%") for v in pf["wape"]],
-        t("pf_col_status"): [t("pf_status_ok") if s == "ok" else t("pf_status_no_optimum") if s == "no_optimum"
+        t("pf_col_status"): [t(f"pf_status_{s}") if s in ("ok", "no_optimum", "no_profit")
                              else localize(e, lang) for s, e in zip(pf["status"], pf["error"])],
     })
     with metrics_area, st.expander(t("pf_expander", n=len(pf)), icon=":material/inventory_2:"):
@@ -883,7 +892,7 @@ sheets = {
                                            t("chart_forecast"): bt.forecast, t("chart_naive"): bt.naive}).round(2)}
        if bt is not None else {}),
 }
-notes = ([] if today.interior else [t("err_no_interior", max=money(max_price, sym))]) + list(dict.fromkeys(
+notes = ([blocker] if blocker else []) + list(dict.fromkeys(
     localize(w, lang) for w in model.warnings + today.warnings + rec.warnings + result.warnings + data_warnings
     + deflate_warnings))
 chart = Chart(

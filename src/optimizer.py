@@ -76,12 +76,18 @@ class DemandModel:
     def equation(self, symbol: str = "") -> str:
         comp, season = self.has_comp, " + s(month)" if self.season is not None else ""
         if self.trend is not None:
-            season += f" {self.trend:+,.3f}·t"
+            season += f" {_coef(self.trend)}·t"
         if self.kind == "linear":
-            s = f"Q = {self.intercept:,.2f} {self.b:+,.3f}·P"
-            return s + (f" {self.c:+,.3f}·P_comp" if comp else "") + season
-        s = f"ln Q = {self.intercept:,.3f} {self.b:+,.3f}·ln P"
-        return s + (f" {self.c:+,.3f}·ln P_comp" if comp else "") + season
+            s = f"Q = {self.intercept:,.2f} {_coef(self.b)}·P"
+            return s + (f" {_coef(self.c)}·P_comp" if comp else "") + season
+        s = f"ln Q = {self.intercept:,.3f} {_coef(self.b)}·ln P"
+        return s + (f" {_coef(self.c)}·ln P_comp" if comp else "") + season
+
+
+def _coef(x: float) -> str:
+    """A signed coefficient: 3 decimals, or 3 significant digits when it is small (a slope per ₺ at
+    ₺50,000 prices is about -0.0015, which 3 decimals would round to -0.002)."""
+    return f"{x:+,.3f}" if x == 0 or abs(x) >= 0.1 else f"{x:+.3g}"
 
 
 def month_dummies(index: pd.DatetimeIndex) -> np.ndarray:
@@ -262,9 +268,17 @@ class ScenarioResult:
     ped_current: float
     break_evens: list[float]
     warnings: list[str]
-    # False when profit still rises at the top of the price grid: there is no optimum inside the
-    # searched range (e.g. inelastic log-log demand), only the grid edge
-    interior: bool = True
+    # "high" when profit still rises at the top of the price grid (e.g. inelastic log-log demand),
+    # "low" when it still rises at the bottom (e.g. zero unit cost): no optimum inside the searched
+    # range, only the grid edge. None for a real optimum.
+    edge: str | None = None
+    # False when no price covers the variable costs (unit cost, fees, VAT): the "optimum" sells
+    # nothing or loses on every unit, so it is no recommendation at all
+    viable: bool = True
+
+    @property
+    def interior(self) -> bool:
+        return self.edge is None
 
 
 def shocked_costs(p: ScenarioParams) -> tuple[float, float]:
@@ -377,11 +391,14 @@ def run_scenario(model: DemandModel, p: ScenarioParams) -> ScenarioResult:
         for j in crossings
     ]
 
-    if i == len(grid) - 1:
+    # Contribution (profit before fixed costs) must be positive somewhere, or every sale loses money
+    viable = bool((profit + fixed_final).max() > 0)
+    edge = "high" if i == len(grid) - 1 else "low" if i == 0 else None
+    if edge == "high":
         warnings.append(Msg("warn_opt_at_top"))
     if not (model.p_min <= optimal["price"] / level <= model.p_max):  # observed range is in real terms
         warnings.append(Msg("warn_extrapolated", p_min=model.p_min, p_max=model.p_max))
-    if optimal["profit"] < 0:
+    if viable and optimal["profit"] < 0:  # sales cover their own costs, but not the fixed costs
         warnings.append(Msg("warn_loss_only"))
     if bool(optimal["cap_binding"]):
         warnings.append(Msg("warn_cap_binding"))
@@ -398,7 +415,8 @@ def run_scenario(model: DemandModel, p: ScenarioParams) -> ScenarioResult:
         ped_current=ped_current,
         break_evens=break_evens,
         warnings=warnings,
-        interior=i < len(grid) - 1,
+        edge=edge,
+        viable=viable,
     )
 
 
@@ -775,11 +793,14 @@ def optimal_price_range(agg: pd.DataFrame, kind: str, params: ScenarioParams, se
 
 def best_model(models: dict, backtests: dict) -> str | None:
     """The model kind to use when the user picks "auto": the lowest backtest error, or the higher
-    in-sample R² when no backtest could be run. `models` maps kind → DemandModel or the fit's
-    exception; None when no model could be fitted."""
+    in-sample R² when no backtest could be run, among the models whose demand falls with price
+    (all fitted models if none does). `models` maps kind → DemandModel or the fit's exception;
+    None when no model could be fitted."""
     fitted = [k for k, m in models.items() if isinstance(m, DemandModel)]
     if not fitted:
         return None
+    # Demand that rises with price can't be priced: prefer the models where it falls, if any
+    fitted = [k for k in fitted if models[k].b < 0] or fitted
     tested = [k for k in fitted if backtests.get(k) is not None and np.isfinite(backtests[k].wape)]
     if tested:
         return min(tested, key=lambda k: backtests[k].wape)

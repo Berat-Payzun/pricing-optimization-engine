@@ -275,3 +275,21 @@ Date,Price_Charged,Quantity_Sold,Cost_Per_Unit,Competitor_Price
     assert df["Cost_Per_Unit"].tolist() == [6.0, 14.0, 4.0, 4.0] and keys["warn_cost_negative"]["n"] == 1
     assert keys["warn_cost_above_price"]["n"] == 1
     assert keys["warn_comp_nonpositive"]["n"] == 2 and df["Competitor_Price"].tolist() == [12.0, 12.0, 12.0, 11.0]
+
+
+def test_infinite_and_overflowing_values_are_dropped_as_missing():
+    rows = "\n".join(f"2024-{m:02d}-01,{10 + m},{30 - m}" for m in range(1, 13))
+    data = "Date,Price_Charged,Quantity_Sold\n" + rows + "\n2024-03-15,inf,5\n2024-04-15,1e308,5\n2024-05-15,12,-inf"
+    df, warnings = load_csv(csv(data), default_cogs=5)
+    assert len(df) == 12 and np.isfinite(df[["Price_Charged", "Quantity_Sold"]].to_numpy()).all()
+    assert "warn_rows_dropped" in [w.key for w in warnings]
+    agg, _ = aggregate(df)
+    assert np.isfinite(agg["Price_Charged"]).all()
+
+
+def test_no_sales_at_all_is_a_clear_error():
+    rows = "\n".join(f"2024-{m:02d}-01,{10 + m},0" for m in range(1, 13))
+    df, _ = load_csv(csv("Date,Price_Charged,Quantity_Sold\n" + rows), default_cogs=5)
+    with pytest.raises(DataValidationError) as e:
+        aggregate(df)
+    assert e.value.args[0].key == "err_no_sales"
