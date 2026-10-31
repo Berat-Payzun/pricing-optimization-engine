@@ -501,7 +501,10 @@ unit_margin = sum(v for _, v in breakdown)
 # ---------- metrics ----------
 
 with metrics_area:
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    # Two rows of three: six cards in one row cut off amounts like "$51,05…" on a laptop screen.
+    # First row: the decision (price, profit, elasticity); second: model quality and macro inputs.
+    c1, c2, c3 = st.columns(3)
+    c4, c5, c6 = st.columns(3)
     with c1:
         st.metric(t("metric_rec_price"), money(rec.price, sym),
                   t("metric_opt_delta", pct=(rec.price / current_price - 1) * 100),
