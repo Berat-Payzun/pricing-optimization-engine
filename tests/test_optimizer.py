@@ -576,3 +576,42 @@ def test_reaction_works_for_loglog_and_flows_into_range_recommend_and_not_test_p
     t0 = optimizer.test_plan(m, p0, 50.0, 5.0, rails)
     t1 = optimizer.test_plan(m, p1, 50.0, 5.0, rails)
     assert (t1.expected_test, t1.expected_current) == (t0.expected_test, t0.expected_current)
+
+
+# ---------- audit regressions ----------
+
+def test_test_price_never_rounds_back_to_the_current_price():
+    from optimizer import Guardrails, evaluate_test
+
+    for ending, expected in ((".99", 20.99), ("whole", 21.0)):
+        # 19.99 + 1% = 20.19: the nearest ".99" is 19.99 itself, the nearest whole number 20.00 (a 0.05% step)
+        _, _, plan = plan_for(step=0.01, rails=Guardrails(max_change=0, ending=ending), current_price=19.99)
+        assert plan.test_price == expected, ending
+    # Floor = ceiling = current price: there is nothing to test, and no verdict (no division by zero)
+    _, _, stuck = plan_for(rails=Guardrails(max_change=0, floor=45.0, ceiling=45.0))
+    assert stuck.test_price == 45.0 and "warn_test_no_change" in [w.key for w in stuck.warnings]
+    assert evaluate_test(stuck, [100, 140, 90, 150] + [None] * (stuck.weeks - 4)) is None
+
+
+def test_inelastic_loglog_has_no_interior_optimum():
+    agg = synthetic_agg("loglog").assign(Quantity_Sold=lambda d: 500 * (d["Price_Charged"] / 45) ** -0.5)
+    m = fit_demand(agg, "loglog")
+    r = run_scenario(m, params(m))
+    assert not r.interior and r.optimal["price"] == r.curve["price"].max()
+    assert run_scenario(fit_demand(synthetic_agg(), "linear"), params(m)).interior
+
+
+def test_negative_competitor_effect_warns():
+    agg = synthetic_agg()
+    agg["Quantity_Sold"] = A + B * agg["Price_Charged"] - C * agg["Competitor_Price"]
+    assert "warn_comp_sign" in [w.key for w in fit_demand(agg, "linear").warnings]
+    assert "warn_comp_sign" not in [w.key for w in fit_demand(synthetic_agg(), "linear").warnings]
+
+
+def test_competitor_price_at_includes_the_reaction():
+    from optimizer import competitor_price_at
+
+    m = fit_demand(synthetic_agg(), "linear")
+    assert competitor_price_at(m, params(m), 40.5) == 50.0  # no reaction: unchanged
+    reacting = params(m, comp_match_cut=0.5)
+    assert competitor_price_at(m, reacting, 40.5) == pytest.approx(50.0 * (1 - 0.5 * 0.1))  # we cut 10%

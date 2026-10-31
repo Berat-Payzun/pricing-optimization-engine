@@ -23,8 +23,8 @@ from config import (BOOTSTRAP_SAMPLES, COUNTRY_MAP, DEFAULTS, MAX_CHANGE_DEFAULT
                     TEST_DEFAULT_STEP, TEST_MAX_WEEKS, TEST_STEP_CHOICES)
 from data_ingestion import PRODUCT, DataValidationError, aggregate, deflate, load_csv
 from macro_api import FRED_KEY_ENV, fred_api_key, get_fx, get_inflation, uses_fred
-from optimizer import (ENDINGS, Guardrails, ScenarioParams, backtest, elasticities, evaluate_test, fit_demand,
-                       optimal_price_range, recommend, run_scenario, step_tradeoff, test_plan)
+from optimizer import (ENDINGS, Guardrails, ScenarioParams, backtest, competitor_price_at, elasticities, evaluate_test,
+                       fit_demand, optimal_price_range, recommend, run_scenario, step_tradeoff, test_plan)
 import scenarios
 from report import Chart, Series, VLine, build_excel, build_pdf
 from translations import LANGUAGES, Msg, localize, translate
@@ -119,6 +119,11 @@ def colors() -> dict:
 def money(x: float, sym: str) -> str:
     sign = "-" if x < 0 else ""
     return f"{sign}{sym}{abs(x):,.2f}"
+
+
+def num(x, spec: str = ".2f", suffix: str = "") -> str:
+    """A number for display, or "—" when it can't be computed (e.g. elasticity where demand is zero)."""
+    return "—" if x is None or not np.isfinite(x) else f"{x:{spec}}{suffix}"
 
 
 def month_year(ts) -> str:
@@ -280,7 +285,8 @@ if isinstance(model, Exception):
 # month's price is never "current"
 excluded = agg["Excluded"].astype(bool) if "Excluded" in agg else pd.Series(False, index=agg.index)
 latest = agg[~excluded].iloc[-1]
-current_price = float(latest["Price_Charged"])
+# In the model's money (the last month's), which differs from the nominal price only when the last month is excluded
+current_price = float(latest["Real_Price"])
 base_cogs = cost_override if cost_override > 0 else float(latest["Cost_Per_Unit"])
 base_comp = float(latest["Real_Competitor_Price"]) if model.has_comp else None
 
@@ -377,14 +383,18 @@ no_reaction = None  # the same recommendation if the competitor didn't react, fo
 if match_cut or match_rise:
     still = ScenarioParams(**{**common, "comp_match_cut": 0.0, "comp_match_rise": 0.0})
     no_reaction = recommend(model, still, run_scenario(model, still), rails)
-try:
-    price_range = cached_range(agg, model_kind, seasonal, asdict(today_params))
-except ValueError:
-    price_range = None
+# The bootstrap range is for the unconstrained optimum: shown only when the recommendation is that
+# optimum, and never when there is no optimum inside the price range
+price_range = None
+if today.interior and not rec.binding:
+    try:
+        price_range = cached_range(agg, model_kind, seasonal, asdict(today_params))
+    except ValueError:
+        pass
 
 opt, rec_row = result.optimal, rec.row
 unconstrained = today.optimal["price"]
-ped_rec, xed_rec = elasticities(model, rec.price, base_comp)
+ped_rec, xed_rec = elasticities(model, rec.price, competitor_price_at(model, today_params, rec.price))
 money_month = month_year(agg.index.max())  # the demand model's prices are in this month's money
 scenario_month = month_year(agg.index.max() + pd.DateOffset(months=12))
 limits = ", ".join(t(f"limit_{b}") for b in rec.binding)
@@ -420,12 +430,12 @@ with metrics_area:
     c2.metric(t("metric_profit", per=per), money(rec_row["profit"], sym),
               money(rec_row["profit"] - today.baseline["profit"], sym),
               help=t("metric_profit_help", profit=money(today.baseline["profit"], sym)))
-    c3.metric(t("metric_ped"), f"{ped_rec:.2f}", help=t("metric_ped_help"))
+    c3.metric(t("metric_ped"), num(ped_rec), help=t("metric_ped_help"))
     with c4:
         if bt is not None:
             # Out-of-sample forecast error replaces the flattering in-sample R²
-            st.metric(t("metric_backtest"), f"{bt.wape * 100:.1f}%", help=t("metric_backtest_help", n=len(bt.months)))
-            naive = f"{bt.naive_wape * 100:.1f}%"
+            st.metric(t("metric_backtest"), num(bt.wape * 100, ".1f", "%"), help=t("metric_backtest_help", n=len(bt.months)))
+            naive = num(bt.naive_wape * 100, ".1f", "%")
             if bt.beats_naive and bt.wape < 0.15:
                 st.badge(t("badge_bt_good", naive=naive), icon=":material/check_circle:", color="green")
             elif bt.beats_naive and bt.wape < 0.30:
@@ -447,6 +457,8 @@ with metrics_area:
                   delta_color="inverse")
         macro_badge(fx, t("badge_fx"))
 
+    if not today.interior:
+        st.error(t("err_no_interior", max=money(max_price, sym)), icon=":material/block:")
     for w in dict.fromkeys(model.warnings + today.warnings + rec.warnings):
         st.warning(localize(w, lang), icon=":material/warning:")
 
@@ -657,13 +669,13 @@ with st.expander(t("details_expander")):
         model_rows = []
         for kind, m in models.items():
             b = backtests[kind]
-            errors = (f"{b.wape * 100:.1f}%", f"{b.naive_wape * 100:.1f}%") if b is not None else ("—", "—")
+            errors = (num(b.wape * 100, ".1f", "%"), num(b.naive_wape * 100, ".1f", "%")) if b is not None else ("—", "—")
             fit = (None, None, None) if isinstance(m, Exception) else (round(m.r2, 3), m.n, round(m.b, 3))
             model_rows.append(dict(zip(columns, (t(f"model_{kind}"), *errors, *fit))))
         model_table = pd.DataFrame(model_rows)
         st.dataframe(model_table, hide_index=True)
-        xed_line = t("details_xed", value=f"{xed_rec:.2f}") if xed_rec is not None else t("details_xed_na")
-        st.markdown(f"- {t('details_ped_current', value=f'{today.ped_current:.2f}')}\n- {xed_line}")
+        xed_line = t("details_xed", value=num(xed_rec)) if xed_rec is not None else t("details_xed_na")
+        st.markdown(f"- {t('details_ped_current', value=num(today.ped_current))}\n- {xed_line}")
         st.markdown(f"- {t('details_price_range', low=money(model.p_min, sym), high=money(model.p_max, sym))}")
     with m2:
         st.markdown(f"**{t('details_notes')}**")
@@ -709,9 +721,9 @@ summary = ([(t("product_label"), product)] if product else []) + [
     (t("sum_range"), f"{money(price_range[0], sym)} – {money(price_range[1], sym)}" if price_range else "—"),
     (t("metric_profit", per=per), money(rec_row["profit"], sym)),
     (t("sum_profit_current", per=per), money(today.baseline["profit"], sym)),
-    (t("metric_ped"), f"{ped_rec:.2f}"),
+    (t("metric_ped"), num(ped_rec)),
     (t("metric_backtest"), t("sum_backtest_value", wape=bt.wape * 100, naive=bt.naive_wape * 100, n=len(bt.months))
-     if bt is not None else "—"),
+     if bt is not None and np.isfinite(bt.wape) and np.isfinite(bt.naive_wape) else "—"),
     (t("metric_r2"), f"{model.r2:.2f}"),
     (t("sum_guardrails"), t("sum_guardrails_value", max_change=max_change, min_margin=min_margin,
                             floor=money(price_floor, sym) if price_floor else "—",
@@ -762,8 +774,9 @@ sheets = {
                                            t("chart_forecast"): bt.forecast, t("chart_naive"): bt.naive}).round(2)}
        if bt is not None else {}),
 }
-notes = list(dict.fromkeys(localize(w, lang) for w in model.warnings + today.warnings + rec.warnings
-                           + result.warnings + data_warnings + deflate_warnings))
+notes = ([] if today.interior else [t("err_no_interior", max=money(max_price, sym))]) + list(dict.fromkeys(
+    localize(w, lang) for w in model.warnings + today.warnings + rec.warnings + result.warnings + data_warnings
+    + deflate_warnings))
 chart = Chart(
     title=t("chart_main_title", per=per),
     x=curve["price"].to_numpy(),
