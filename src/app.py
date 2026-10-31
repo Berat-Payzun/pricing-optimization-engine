@@ -26,7 +26,7 @@ from optimizer import (ENDINGS, Guardrails, ScenarioParams, backtest, best_model
                        test_plan)
 from portfolio import portfolio, product_inputs
 import scenarios
-from report import Chart, Series, VLine, build_excel, build_pdf
+from report import Chart, Series, VLine, build_excel, build_pdf, label_rows
 from translations import LANGUAGES, Msg, localize, translate
 
 SAMPLE_PATH = Path(__file__).resolve().parents[1] / "sample_data.csv"
@@ -34,9 +34,9 @@ SAMPLE_PATH = Path(__file__).resolve().parents[1] / "sample_data.csv"
 # Categorical slots from the validated reference palette (fixed order), light / dark steps
 PALETTE = {
     "light": {"s1": "#2a78d6", "s2": "#eb6834", "s3": "#1baf7a", "muted": "#898781", "band": "rgba(137,135,129,0.12)",
-              "range": "rgba(42,120,214,0.10)"},
+              "range": "rgba(42,120,214,0.10)", "label_bg": "rgba(255,255,255,0.85)"},
     "dark": {"s1": "#3987e5", "s2": "#d95926", "s3": "#199e70", "muted": "#898781", "band": "rgba(195,194,183,0.10)",
-             "range": "rgba(57,135,229,0.16)"},
+             "range": "rgba(57,135,229,0.16)", "label_bg": "rgba(14,17,23,0.85)"},
 }
 
 st.set_page_config(page_title="Pricing Optimization Engine", page_icon="📈", layout="wide")
@@ -147,6 +147,31 @@ def style(fig: go.Figure, title: str, xtitle: str, ytitle: str, height: int = 38
         yaxis=dict(title=ytitle, zeroline=False),
     )
     return fig
+
+
+MARKER_PLOT_PX = 600  # assumed plot width when sizing marker labels (narrower than most screens: errs to more rows)
+MARKER_CHAR_PX = 6.5  # average character width at 11px
+MARKER_ROW = 0.065  # height of one label row, as a fraction of the plot
+
+
+def add_markers(fig: go.Figure, markers: list[dict], x_lo: float, x_hi: float, bg: str) -> None:
+    """Vertical marker lines with their labels at the top. A label sits right of its line (left of
+    it near the right edge), and labels that would overlap are stacked in rows instead of drawn on
+    top of each other. Each marker: x, text, color, optional dash, width, line (False = label only)."""
+    span = max(x_hi - x_lo, 1e-9)
+    spans, sides = [], []
+    for m in markers:
+        w = (len(m["text"]) * MARKER_CHAR_PX + 10) / MARKER_PLOT_PX * span
+        right = m["x"] + w <= x_hi
+        sides.append(right)
+        spans.append((m["x"], m["x"] + w) if right else (m["x"] - w, m["x"]))
+    for m in markers:
+        if m.get("line", True):
+            fig.add_vline(x=m["x"], line=dict(color=m["color"], width=m.get("width", 1.5), dash=m.get("dash", "dot")))
+    for m, right, row in zip(markers, sides, label_rows(spans, gap=0.01 * span)):
+        fig.add_annotation(x=m["x"], xref="x", y=1 - row * MARKER_ROW, yref="paper", yanchor="top",
+                           xanchor="left" if right else "right", xshift=4 if right else -4, showarrow=False,
+                           text=m["text"], font=dict(color=m["color"], size=11), bgcolor=bg)
 
 
 def reset_shocks(infl, fx, us_infl):
@@ -570,9 +595,10 @@ curve = today.curve
 with charts_area:
     fig = go.Figure()
     cap = curve[curve["cap_binding"]]
+    markers = []
     if not cap.empty:
-        fig.add_vrect(x0=cap["price"].min(), x1=cap["price"].max(), fillcolor=col["band"], line_width=0,
-                      annotation_text=t("chart_capacity"), annotation_position="top left")
+        fig.add_vrect(x0=cap["price"].min(), x1=cap["price"].max(), fillcolor=col["band"], line_width=0)
+        markers.append(dict(x=float(cap["price"].min()), text=t("chart_capacity"), color=col["muted"], line=False))
     if price_range:
         fig.add_vrect(x0=price_range[0], x1=price_range[1], fillcolor=col["range"], line_width=0,
                       annotation_text=t("chart_range"), annotation_position="bottom left")
@@ -580,14 +606,13 @@ with charts_area:
     fig.add_trace(go.Scatter(x=curve["price"], y=curve["revenue"], name=t("chart_revenue"), line=dict(color=col["s2"], width=1.5)))
     fig.add_trace(go.Scatter(x=curve["price"], y=curve["total_cost"], name=t("chart_total_cost"), line=dict(color=col["s3"], width=1.5)))
     fig.add_hline(y=0, line=dict(color=col["muted"], width=1))
-    fig.add_vline(x=rec.price, line=dict(color=col["s1"], width=1.5, dash="dot"),
-                  annotation_text=t("chart_recommended", price=money(rec.price, sym)), annotation_position="top right")
+    markers.append(dict(x=rec.price, text=t("chart_recommended", price=money(rec.price, sym)), color=col["s1"]))
     if abs(rec.price - unconstrained) >= 0.005:
-        fig.add_vline(x=unconstrained, line=dict(color=col["muted"], width=1, dash="dot"),
-                      annotation_text=t("chart_unconstrained", price=money(unconstrained, sym)),
-                      annotation_position="top left")
-    fig.add_vline(x=current_price, line=dict(color=col["muted"], width=1.5, dash="dash"),
-                  annotation_text=t("chart_current", price=money(current_price, sym)), annotation_position="bottom right")
+        markers.append(dict(x=unconstrained, text=t("chart_unconstrained", price=money(unconstrained, sym)),
+                            color=col["muted"], width=1))
+    markers.append(dict(x=current_price, text=t("chart_current", price=money(current_price, sym)),
+                        color=col["muted"], dash="dash"))
+    add_markers(fig, markers, float(curve["price"].min()), float(curve["price"].max()), col["label_bg"])
     fig.add_trace(go.Scatter(x=[rec.price], y=[rec_row["profit"]], mode="markers", name=t("chart_peak"),
                              marker=dict(color=col["s1"], size=11, line=dict(color="white", width=2)),
                              showlegend=False, hoverinfo="skip"))
