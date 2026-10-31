@@ -10,7 +10,7 @@ Pipeline (Steps refer to the architecture guide):
   7. Local inflation on the rest of COGS and fixed  (shocked_costs)
   8. Profit sweep over a 2,000-point price grid     (run_scenario); with price pass-through,
      demand is evaluated at the real price P / (1 + inflation). VAT inside the price and
-     price-based fees (commission, payment) come off each unit's revenue.
+     price-based fees (variable selling costs) come off each unit's revenue.
   9. Guardrails on the recommendation               (recommend): max step, min margin,
      floor/ceiling and price endings
 Model checking: a rolling out-of-sample backtest (backtest) and a price test plan that alternates the
@@ -209,18 +209,13 @@ class ScenarioParams:
     price_passthrough: bool = False
     # Sales channel economics. Fees are charged on the customer-facing (VAT-inclusive) price;
     # vat is the rate contained in the price (0 when prices are net of VAT).
-    commission: float = 0.0  # fraction of price, e.g. marketplace commission
-    payment_fee: float = 0.0  # fraction of price
+    fee_rate: float = 0.0  # fraction of price: marketplace, payment and sales commissions combined
     vat: float = 0.0  # fraction
     extra_unit_cost: float = 0.0  # shipping, packaging etc. per unit, sourced locally
     # Competitor reaction: the share of our price move (vs today's price, in real terms) that the
     # competitor copies, separately for cuts and rises (competitors often match cuts, not rises)
     comp_match_cut: float = 0.0
     comp_match_rise: float = 0.0
-
-    @property
-    def fee_rate(self) -> float:
-        return self.commission + self.payment_fee
 
 
 @dataclass

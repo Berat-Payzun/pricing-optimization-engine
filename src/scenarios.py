@@ -19,7 +19,7 @@ from optimizer import ENDINGS
 from translations import Msg
 
 APP_ID = "pricing-optimization-engine"
-SCHEMA = 1
+SCHEMA = 2
 
 
 @dataclass(frozen=True)
@@ -48,8 +48,7 @@ SETTINGS: dict[str, Setting] = {
     "use_season": Setting(bool),
     "product": Setting(str),
     "max_price": Setting(float, 0.01),
-    "commission": Setting(float, 0.0, 90.0),
-    "payment_fee": Setting(float, 0.0, 20.0),
+    "variable_fees": Setting(float, 0.0, 90.0),
     "prices_incl_vat": Setting(bool),
     "vat_rate": Setting(float, 0.0, 50.0),
     "extra_unit_cost": Setting(float, 0.0),
@@ -129,6 +128,17 @@ def _test_plan(raw) -> dict | None:
     return plan if len(actual) == weeks and all(a is None or math.isfinite(a) for a in actual) else None
 
 
+def _migrate(settings: dict) -> dict:
+    """Schema 1 saved marketplace commission and payment fee as two inputs; they are now one sum.
+    A value that isn't a number is passed on so it is dropped with a warning."""
+    settings = dict(settings)
+    old = [settings.pop(k) for k in ("commission", "payment_fee") if k in settings]
+    if old and "variable_fees" not in settings:
+        bad = [v for v in old if _check(v, Setting(float)) is None]
+        settings["variable_fees"] = bad[0] if bad else float(sum(old))
+    return settings
+
+
 def load(raw: bytes) -> Loaded:
     """Parse and validate a scenario file. Raises ScenarioError if it isn't one."""
     try:
@@ -143,7 +153,7 @@ def load(raw: bytes) -> Loaded:
         warnings.append(Msg("scen_warn_newer"))
 
     settings, dropped, clipped = {}, [], []
-    for key, value in doc["settings"].items():
+    for key, value in _migrate(doc["settings"]).items():
         checked = _check(value, SETTINGS[key]) if key in SETTINGS else None
         if checked is None:
             dropped.append(str(key))

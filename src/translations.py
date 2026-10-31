@@ -571,17 +571,19 @@ STRINGS: dict[str, dict[str, str]] = {
     },
     # ---------- fees and taxes ----------
     "fees_header": {"en": "Fees & taxes", "tr": "Kesintiler ve vergiler", "de": "Gebühren & Steuern"},
-    "commission_label": {"en": "Marketplace commission (%)", "tr": "Pazaryeri komisyonu (%)", "de": "Marktplatzprovision (%)"},
-    "commission_help": {
-        "en": "Share of the selling price the marketplace keeps (e.g. Trendyol, Amazon: often 15–25%).",
-        "tr": "Pazaryerinin satış fiyatından aldığı pay (ör. Trendyol, Amazon: çoğunlukla %15–25).",
-        "de": "Anteil am Verkaufspreis, den der Marktplatz einbehält (z. B. Amazon: oft 15–25 %).",
-    },
-    "payment_fee_label": {"en": "Payment fee (%)", "tr": "Ödeme komisyonu (%)", "de": "Zahlungsgebühr (%)"},
-    "payment_fee_help": {
-        "en": "Card or payment-provider fee as a share of the selling price.",
-        "tr": "Satış fiyatının yüzdesi olarak kart veya ödeme kuruluşu komisyonu.",
-        "de": "Karten- oder Zahlungsanbietergebühr als Anteil am Verkaufspreis.",
+    "fee_label": {"en": "Variable selling costs (%)", "tr": "Değişken satış giderleri (%)",
+                  "de": "Variable Vertriebskosten (%)"},
+    "fee_help": {
+        "en": "Every cost charged as a share of the selling price, added up: marketplace commission (e.g. Trendyol, "
+              "Amazon: often 15–25%), card or payment fee, sales-rep or distributor commission. Calculated on the "
+              "gross customer price (including VAT), matching standard marketplace terms (e.g. Amazon, Trendyol).",
+        "tr": "Satış fiyatının yüzdesi olarak kesilen tüm giderlerin toplamı: pazaryeri komisyonu (ör. Trendyol, "
+              "Amazon: çoğunlukla %15–25), kart veya ödeme komisyonu, satış temsilcisi ya da distribütör komisyonu. "
+              "Pazaryerlerinin standart koşullarına (ör. Amazon, Trendyol) uygun olarak müşterinin ödediği KDV dahil "
+              "fiyat üzerinden hesaplanır.",
+        "de": "Alle Kosten, die als Anteil am Verkaufspreis anfallen, zusammengezählt: Marktplatzprovision (z. B. "
+              "Amazon: oft 15–25 %), Karten- oder Zahlungsgebühr, Vertreter- oder Händlerprovision. Berechnet auf den "
+              "Bruttopreis des Kunden (inkl. MwSt.), wie bei den üblichen Marktplatzkonditionen (z. B. Amazon, Trendyol).",
     },
     "vat_toggle": {"en": "Uploaded prices include VAT", "tr": "Yüklenen fiyatlara KDV dahil", "de": "Hochgeladene Preise enthalten MwSt."},
     "vat_toggle_help": {
@@ -720,8 +722,7 @@ STRINGS: dict[str, dict[str, str]] = {
     },
     "breakdown_price": {"en": "Headline price", "tr": "Satış fiyatı", "de": "Verkaufspreis"},
     "breakdown_vat": {"en": "VAT", "tr": "KDV", "de": "MwSt."},
-    "breakdown_commission": {"en": "Marketplace commission", "tr": "Pazaryeri komisyonu", "de": "Marktplatzprovision"},
-    "breakdown_payment": {"en": "Payment fee", "tr": "Ödeme komisyonu", "de": "Zahlungsgebühr"},
+    "breakdown_fees": {"en": "Variable selling costs", "tr": "Değişken satış giderleri", "de": "Variable Vertriebskosten"},
     "breakdown_cogs": {"en": "Unit cost (COGS)", "tr": "Birim maliyet (SMM)", "de": "Stückkosten"},
     "breakdown_extra": {"en": "Extra unit cost", "tr": "Ek birim maliyet", "de": "Zusatzkosten"},
     "breakdown_margin": {"en": "Net operating margin", "tr": "Net faaliyet marjı", "de": "Netto-Betriebsmarge"},
@@ -899,9 +900,9 @@ STRINGS: dict[str, dict[str, str]] = {
     },
     "sum_fees": {"en": "Fees & taxes", "tr": "Kesintiler ve vergiler", "de": "Gebühren & Steuern"},
     "sum_fees_value": {
-        "en": "commission {commission:.1f}% · payment fee {payment:.1f}% · VAT {vat} · extra unit cost {extra}",
-        "tr": "komisyon %{commission:.1f} · ödeme komisyonu %{payment:.1f} · KDV {vat} · ek birim maliyet {extra}",
-        "de": "Provision {commission:.1f} % · Zahlungsgebühr {payment:.1f} % · MwSt. {vat} · Zusatzkosten {extra}",
+        "en": "variable selling costs {fees:.1f}% · VAT {vat} · extra unit cost {extra}",
+        "tr": "değişken satış giderleri %{fees:.1f} · KDV {vat} · ek birim maliyet {extra}",
+        "de": "Variable Vertriebskosten {fees:.1f} % · MwSt. {vat} · Zusatzkosten {extra}",
     },
     "vat_included": {"en": "{rate:.1f}% included in prices", "tr": "%{rate:.1f} fiyatlara dahil", "de": "{rate:.1f} % in Preisen enthalten"},
     "vat_excluded": {"en": "not included in prices", "tr": "fiyatlara dahil değil", "de": "nicht in Preisen enthalten"},
