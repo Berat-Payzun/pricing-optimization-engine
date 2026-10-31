@@ -119,7 +119,7 @@ def test_semicolon_csv_with_dot_decimals_is_not_corrupted():
 
 
 def test_comma_csv_keeps_iso_dates_and_utf8_bom():
-    raw = "﻿Date,Price_Charged,Quantity_Sold\n2024-03-04,10.5,5\n".encode("utf-8")
+    raw = "﻿Date,Price_Charged,Quantity_Sold\n2024-03-04,10.5,5\n".encode()
     df, _ = load_csv(io.BytesIO(raw), default_cogs=1)
     assert df["Date"].iloc[0] == pd.Timestamp("2024-03-04")
     assert df["Price_Charged"].iloc[0] == pytest.approx(10.5)
@@ -254,7 +254,8 @@ def test_no_flag_column_leaves_aggregate_unchanged():
 def test_product_without_competitor_prices_drops_the_column():
     rows = ["Date,Product,Price_Charged,Quantity_Sold,Competitor_Price"]
     for i, d in enumerate(pd.date_range("2024-01-01", periods=12, freq="MS")):
-        rows += [f"{d.date()},A,{10 + i % 4},{100 - i % 4 * 5},{11 + i % 3}", f"{d.date()},B,{20 + i % 4},{80 - i % 4 * 4},"]
+        rows += [f"{d.date()},A,{10 + i % 4},{100 - i % 4 * 5},{11 + i % 3}",
+                 f"{d.date()},B,{20 + i % 4},{80 - i % 4 * 4},"]
     df, _ = load_csv(csv("\n".join(rows)), default_cogs=5)
     agg_b, warnings = aggregate(df[df["Product"] == "B"].drop(columns="Product"))
     assert "Competitor_Price" not in agg_b and "warn_comp_empty" in [w.key for w in warnings]

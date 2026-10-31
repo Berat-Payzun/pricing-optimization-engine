@@ -73,7 +73,7 @@ The app opens with `sample_data.csv` loaded: four products with known demand cur
 | Gift Set | 36 months | `Q/day = (60 − 0.8·P + 0.4·P_comp) × season` (Nov/Dec peak), December stockouts flagged | Turn on seasonality: the backtest error drops |
 | New Tumbler | 2 months | Just launched | Too few months to price: the **All products** table shows why |
 
-Run the tests with `pytest`.
+Run the tests with `pytest` and the linter with `ruff check .` (both run in CI).
 
 ## File format (CSV or Excel)
 

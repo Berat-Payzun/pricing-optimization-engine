@@ -2,8 +2,16 @@ import pandas as pd
 import pytest
 
 import macro_api
-from macro_api import (fx_from_series, get_fx, get_inflation, parse_fred_json, parse_oecd_csv, parse_ons_months,
-                       rate_to_index, yoy_inflation)
+from macro_api import (
+    fx_from_series,
+    get_fx,
+    get_inflation,
+    parse_fred_json,
+    parse_oecd_csv,
+    parse_ons_months,
+    rate_to_index,
+    yoy_inflation,
+)
 
 TEST_KEY = "0123456789abcdef0123456789abcdef"
 
@@ -199,7 +207,8 @@ def test_rate_to_index_is_monthly_and_keeps_annual_rates():
     assert yoy_inflation(idx) == pytest.approx(4.0)
     assert idx[pd.Timestamp("2024-07-01")] / idx[pd.Timestamp("2023-07-01")] == pytest.approx(1.03)
     # Log-linear in between: six months is half the year's growth
-    assert idx[pd.Timestamp("2025-01-01")] / idx[pd.Timestamp("2024-07-01")] == pytest.approx(1.04 ** (184 / 365), rel=1e-4)
+    half_year = idx[pd.Timestamp("2025-01-01")] / idx[pd.Timestamp("2024-07-01")]
+    assert half_year == pytest.approx(1.04 ** (184 / 365), rel=1e-4)
 
 
 def test_world_inflation_from_annual_rates(monkeypatch):

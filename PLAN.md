@@ -109,7 +109,7 @@ were fixed in PR #7.
 - [x] 5. Minor fixes
 - [ ] 6a. README showcase
 - [x] 6b. Locale-aware numbers
-- [ ] 6c. Ruff lint in CI
+- [x] 6c. Ruff lint in CI
 
 ## Plan
 

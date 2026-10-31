@@ -17,7 +17,8 @@ def synthetic_agg(kind="linear", n=36, noise=0.0, seed=0):
         q = np.exp(10 - 2.5 * np.log(p) + 0.8 * np.log(pc))
     q = q * (1 + rng.normal(0, noise, n))
     idx = pd.date_range("2023-01-01", periods=n, freq="MS")
-    return pd.DataFrame({"Price_Charged": p, "Competitor_Price": pc, "Quantity_Sold": q, "Cost_Per_Unit": 20.0}, index=idx)
+    return pd.DataFrame({"Price_Charged": p, "Competitor_Price": pc, "Quantity_Sold": q, "Cost_Per_Unit": 20.0},
+                        index=idx)
 
 
 def params(model, **kw):
@@ -172,7 +173,8 @@ def seasonal_agg(n=36, seed=1):
     p = 45 + 0.02 * season + rng.uniform(-6, 6, n)
     pc = rng.uniform(40, 55, n)
     q = A + B * p + C * pc + season
-    return pd.DataFrame({"Price_Charged": p, "Competitor_Price": pc, "Quantity_Sold": q, "Cost_Per_Unit": 20.0}, index=idx)
+    return pd.DataFrame({"Price_Charged": p, "Competitor_Price": pc, "Quantity_Sold": q, "Cost_Per_Unit": 20.0},
+                        index=idx)
 
 
 def test_seasonal_fit_separates_season_from_price():
@@ -404,7 +406,11 @@ def test_backtest_never_trains_on_the_month_it_forecasts(monkeypatch):
 
     seen = []
     real_fit = optimizer.fit_demand
-    monkeypatch.setattr(optimizer, "fit_demand", lambda agg, *a, **k: seen.append(agg.index.max()) or real_fit(agg, *a, **k))
+    def recording_fit(agg, *a, **k):
+        seen.append(agg.index.max())
+        return real_fit(agg, *a, **k)
+
+    monkeypatch.setattr(optimizer, "fit_demand", recording_fit)
     agg = synthetic_agg(noise=0.05)
     bt = optimizer.backtest(agg, "linear")
     assert seen == list(agg.index[-7:-1])  # each fit ends the month before its forecast
@@ -452,7 +458,10 @@ def test_plan_weeks_follow_power_formula():
     from optimizer import WEEKS_PER_MONTH, Z90, Z_POWER
 
     m, p, plan = plan_for(step=0.10, noise=60.0)
-    weekly = lambda price: m.predict(price, 50.0) / WEEKS_PER_MONTH
+
+    def weekly(price):
+        return m.predict(price, 50.0) / WEEKS_PER_MONTH
+
     assert plan.test_price == 49.5
     assert plan.expected_test == pytest.approx(weekly(49.5)) and plan.expected_current == pytest.approx(weekly(45.0))
     sd_week = 60.0 / np.sqrt(WEEKS_PER_MONTH)
@@ -491,7 +500,8 @@ def test_bigger_step_shortens_the_test():
     p = params(m)
     curve = optimizer.step_tradeoff(m, p, 50.0, 60.0, optimizer.Guardrails(max_change=0))
     assert curve["step"].tolist() == sorted(curve["step"])
-    assert curve["weeks_needed"].is_monotonic_decreasing and curve["weeks_needed"].iloc[0] > curve["weeks_needed"].iloc[-1]
+    weeks = curve["weeks_needed"]
+    assert weeks.is_monotonic_decreasing and weeks.iloc[0] > weeks.iloc[-1]
     # Linear demand: the weekly difference grows with the step, so weeks fall roughly with step²
     small, large = curve.set_index("step").loc[[0.05, 0.10], "weeks_needed"]
     assert small / large == pytest.approx(4, rel=0.25)
@@ -572,7 +582,8 @@ def test_reaction_works_for_loglog_and_flows_into_range_recommend_and_not_test_p
     assert np.isfinite(r1.curve["profit"]).all() and r1.optimal["price"] != r0.optimal["price"]
     rails = optimizer.Guardrails(max_change=0)
     assert optimizer.recommend(m, p1, r1, rails).price == r1.optimal["price"]
-    assert optimizer.optimal_price_range(agg, "loglog", p1, seed=2) != optimizer.optimal_price_range(agg, "loglog", p0, seed=2)
+    range0 = optimizer.optimal_price_range(agg, "loglog", p0, seed=2)
+    assert optimizer.optimal_price_range(agg, "loglog", p1, seed=2) != range0
     t0 = optimizer.test_plan(m, p0, 50.0, 5.0, rails)
     t1 = optimizer.test_plan(m, p1, 50.0, 5.0, rails)
     assert (t1.expected_test, t1.expected_current) == (t0.expected_test, t0.expected_current)
@@ -690,7 +701,7 @@ def test_ped_confidence_levels():
 
 
 def test_best_model_follows_the_backtest_then_r2():
-    from optimizer import Backtest, backtest, best_model
+    from optimizer import backtest, best_model
 
     for kind in ("linear", "loglog"):
         agg = synthetic_agg(kind, noise=0.02)
@@ -711,7 +722,8 @@ def test_sensitivity_moves_the_optimum_the_right_way():
     assert s.loc["cogs", "price_high"] > s.attrs["base_price"] > s.loc["cogs", "price_low"]
     assert s.loc["elasticity", "price_high"] < s.attrs["base_price"]  # more price-sensitive → lower price
     assert s.loc["competitor", "price_high"] > s.attrs["base_price"]  # dearer competitor → room to raise
-    assert s.loc["inflation", "price_high"] > s.attrs["base_price"] > s.loc["inflation", "price_low"]  # costs up → price up
+    # costs up → price up
+    assert s.loc["inflation", "price_high"] > s.attrs["base_price"] > s.loc["inflation", "price_low"]
     spread = (s["price_high"] - s["price_low"]).abs()
     assert spread.is_monotonic_decreasing
 
@@ -770,6 +782,7 @@ def test_auto_skips_demand_that_rises_with_price():
         return Backtest(months, np.array([100.0, 100.0]), np.array([100.0 - err, 100.0 + err]), np.array([90.0, 90.0]))
 
     # upward-sloping linear fits perfectly, but log-log is the one that can be priced
-    assert best_model({"linear": model(4.5), "loglog": model(-1.5)}, {"linear": bt(0.0), "loglog": bt(20.0)}) == "loglog"
+    assert best_model({"linear": model(4.5), "loglog": model(-1.5)},
+                      {"linear": bt(0.0), "loglog": bt(20.0)}) == "loglog"
     # both slope upward: the old rule (lowest error) still picks one
     assert best_model({"linear": model(4.5), "loglog": model(1.5)}, {"linear": bt(0.0), "loglog": bt(20.0)}) == "linear"

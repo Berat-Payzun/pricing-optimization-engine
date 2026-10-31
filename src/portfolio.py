@@ -13,8 +13,18 @@ import numpy as np
 import pandas as pd
 
 from data_ingestion import PRODUCT, DataValidationError, aggregate, deflate
-from optimizer import (DemandModel, Guardrails, ScenarioParams, backtest, best_model, competitor_price_at,
-                       elasticities, fit_demand, recommend, run_scenario)
+from optimizer import (
+    DemandModel,
+    Guardrails,
+    ScenarioParams,
+    backtest,
+    best_model,
+    competitor_price_at,
+    elasticities,
+    fit_demand,
+    recommend,
+    run_scenario,
+)
 
 COLUMNS = ["product", "months", "model", "current_price", "rec_price", "change", "ped", "contribution_current",
            "contribution_rec", "uplift", "wape", "status", "error"]

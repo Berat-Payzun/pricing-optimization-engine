@@ -2,7 +2,6 @@ import io
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from data_ingestion import load_csv
 from optimizer import Guardrails

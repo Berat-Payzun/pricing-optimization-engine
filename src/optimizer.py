@@ -25,8 +25,18 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
-from config import (BACKTEST_MIN_MONTHS, BACKTEST_MONTHS, BOOTSTRAP_SAMPLES, PERIOD_MULT, PRICE_GRID_POINTS,
-                    SEASONAL_MIN_MONTHS, TEST_DEFAULT_STEP, TEST_MAX_WEEKS, TEST_MIN_WEEKS, TEST_STEP_CHOICES)
+from config import (
+    BACKTEST_MIN_MONTHS,
+    BACKTEST_MONTHS,
+    BOOTSTRAP_SAMPLES,
+    PERIOD_MULT,
+    PRICE_GRID_POINTS,
+    SEASONAL_MIN_MONTHS,
+    TEST_DEFAULT_STEP,
+    TEST_MAX_WEEKS,
+    TEST_MIN_WEEKS,
+    TEST_STEP_CHOICES,
+)
 from translations import Msg
 
 
@@ -725,7 +735,8 @@ def evaluate_test(plan: TestPlan, actual) -> TestVerdict | None:
         observed_diff=observed,
         ci=ci,
         elasticity_observed=_arc_elasticity(test.mean(), cur.mean(), plan.test_price, plan.current_price),
-        elasticity_model=_arc_elasticity(plan.expected_test, plan.expected_current, plan.test_price, plan.current_price),
+        elasticity_model=_arc_elasticity(plan.expected_test, plan.expected_current, plan.test_price,
+                                         plan.current_price),
         level_ratio=float(a[~np.isnan(a)].sum() / expected.sum()) if expected.sum() > 0 else float("nan"),
     )
 
@@ -770,8 +781,8 @@ def bootstrap(agg: pd.DataFrame, kind: str, params: ScenarioParams, seasonal: bo
         x_mean, y_mean = X.mean(axis=0), y.mean()
         coef = np.linalg.lstsq(X - x_mean, y - y_mean, rcond=None)[0]
         model = _model(d, kind, y_mean - x_mean @ coef, coef, [])
-        profit = _economics(model, s.grid, _comp_at(params, s, s.grid), s.cogs_final, s.fixed_final, params.capacity, mult,
-                            s.level, params.vat, params.fee_rate)["profit"]
+        profit = _economics(model, s.grid, _comp_at(params, s, s.grid), s.cogs_final, s.fixed_final,
+                            params.capacity, mult, s.level, params.vat, params.fee_rate)["profit"]
         prices.append(s.grid[int(np.argmax(profit))])
         peds.append(elasticities(model, ped_price / s.level, ped_comp)[0])
     if len(prices) < n / 2:

@@ -17,15 +17,38 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from config import (BOOTSTRAP_SAMPLES, COUNTRY_MAP, DEFAULTS, MAX_CHANGE_DEFAULT, PERIOD_MULT, SEASONAL_MIN_MONTHS,
-                    TEST_DEFAULT_STEP, TEST_MAX_WEEKS, TEST_STEP_CHOICES)
+import scenarios
+from config import (
+    BOOTSTRAP_SAMPLES,
+    COUNTRY_MAP,
+    DEFAULTS,
+    MAX_CHANGE_DEFAULT,
+    PERIOD_MULT,
+    SEASONAL_MIN_MONTHS,
+    TEST_DEFAULT_STEP,
+    TEST_MAX_WEEKS,
+    TEST_STEP_CHOICES,
+)
 from data_ingestion import PRODUCT, DataValidationError, aggregate, deflate, load_csv
 from macro_api import FRED_KEY_ENV, fred_api_key, get_fx, get_inflation, uses_fred
-from optimizer import (ENDINGS, Guardrails, ScenarioParams, backtest, best_model, bootstrap, competitor_price_at,
-                       elasticities, evaluate_test, fit_demand, recommend, run_scenario, sensitivity, step_tradeoff,
-                       test_plan)
+from optimizer import (
+    ENDINGS,
+    Guardrails,
+    ScenarioParams,
+    backtest,
+    best_model,
+    bootstrap,
+    competitor_price_at,
+    elasticities,
+    evaluate_test,
+    fit_demand,
+    recommend,
+    run_scenario,
+    sensitivity,
+    step_tradeoff,
+    test_plan,
+)
 from portfolio import portfolio, product_inputs
-import scenarios
 from report import Chart, Series, VLine, build_excel, build_pdf, label_rows
 from translations import DECIMAL_COMMA, LANGUAGES, Msg, fmt_money, fmt_number, localize, translate
 
@@ -234,7 +257,8 @@ with st.sidebar:
     drop_dupes = st.toggle(t("dupes_label"), value=True, help=t("dupes_help"), key="drop_dupes")
     product_slot = st.container()  # filled once the file is read, if it has a product column
 
-    country = st.selectbox(t("country_label"), list(COUNTRY_MAP), format_func=lambda c: t(f"country_{c}"), key="country")
+    country = st.selectbox(t("country_label"), list(COUNTRY_MAP), format_func=lambda c: t(f"country_{c}"),
+                           key="country")
     sym = COUNTRY_MAP[country]["symbol"]
     is_usd = COUNTRY_MAP[country]["currency"] == "USD"  # US and Global: no FX exposure
 
@@ -423,7 +447,8 @@ if not model.has_comp:
 usd_inflation = (inflation if is_usd else usd_infl_pct) / 100
 
 common = dict(base_cogs=base_cogs, fixed_monthly=fixed_monthly, capacity=capacity or np.inf, period=timeframe,
-              import_share=import_share / 100, base_comp_price=base_comp, current_price=current_price, max_price=max_price,
+              import_share=import_share / 100, base_comp_price=base_comp, current_price=current_price,
+              max_price=max_price,
               fee_rate=fee_pct / 100,
               vat=vat_rate / 100 if prices_incl_vat else 0.0, extra_unit_cost=extra_cost,
               comp_match_cut=match_cut / 100, comp_match_rise=match_rise / 100)
@@ -504,7 +529,8 @@ with metrics_area:
     with c4:
         if bt is not None:
             # Out-of-sample forecast error replaces the flattering in-sample R²
-            st.metric(t("metric_backtest"), num(bt.wape * 100, ".1f", "%"), help=t("metric_backtest_help", n=len(bt.months)))
+            st.metric(t("metric_backtest"), num(bt.wape * 100, ".1f", "%"),
+                      help=t("metric_backtest_help", n=len(bt.months)))
             naive = num(bt.naive_wape * 100, ".1f", "%")
             if bt.beats_naive and bt.wape < 0.15:
                 st.badge(t("badge_bt_good", naive=naive), icon=":material/check_circle:", color="green")
@@ -624,9 +650,12 @@ with charts_area:
     if price_range:
         fig.add_vrect(x0=price_range[0], x1=price_range[1], fillcolor=col["range"], line_width=0,
                       annotation_text=t("chart_range"), annotation_position="bottom left")
-    fig.add_trace(go.Scatter(x=curve["price"], y=curve["profit"], mode="lines", name=t("chart_net_profit"), line=dict(color=col["s1"], width=3)))
-    fig.add_trace(go.Scatter(x=curve["price"], y=curve["revenue"], mode="lines", name=t("chart_revenue"), line=dict(color=col["s2"], width=1.5)))
-    fig.add_trace(go.Scatter(x=curve["price"], y=curve["total_cost"], mode="lines", name=t("chart_total_cost"), line=dict(color=col["s3"], width=1.5)))
+    fig.add_trace(go.Scatter(x=curve["price"], y=curve["profit"], mode="lines", name=t("chart_net_profit"),
+                             line=dict(color=col["s1"], width=3)))
+    fig.add_trace(go.Scatter(x=curve["price"], y=curve["revenue"], mode="lines", name=t("chart_revenue"),
+                             line=dict(color=col["s2"], width=1.5)))
+    fig.add_trace(go.Scatter(x=curve["price"], y=curve["total_cost"], mode="lines", name=t("chart_total_cost"),
+                             line=dict(color=col["s3"], width=1.5)))
     fig.add_hline(y=0, line=dict(color=col["muted"], width=1))
     markers.append(dict(x=rec.price, text=t("chart_recommended", price=money(rec.price, sym)), color=col["s1"]))
     if abs(rec.price - unconstrained) >= 0.005:
@@ -660,10 +689,12 @@ with charts_area:
         if not out_months.empty:
             fig.add_trace(go.Scatter(x=out_months[price_col], y=out_months["Quantity_Sold"] * PERIOD_MULT[timeframe],
                                      mode="markers", name=t("chart_excluded"),
-                                     marker=dict(color="rgba(0,0,0,0)", size=9, line=dict(color=col["muted"], width=1.5)),
+                                     marker=dict(color="rgba(0,0,0,0)", size=9,
+                                                 line=dict(color=col["muted"], width=1.5)),
                                      hovertemplate=money_tpl("%{x:,.2f}") + f" → %{{y:,.0f}} {units}<extra></extra>"))
         # Fitted demand in today's money (no shock), comparable with the observed real prices
-        fig.add_trace(go.Scatter(x=today.curve["price"], y=today.curve["q_demand"], name=t("chart_fitted"), line=dict(color=col["s1"], width=2),
+        fig.add_trace(go.Scatter(x=today.curve["price"], y=today.curve["q_demand"], name=t("chart_fitted"),
+                                 line=dict(color=col["s1"], width=2),
                                  hovertemplate=f"%{{y:,.0f}} {units}<extra></extra>"))
         style(fig, t("chart_demand_title", per=per),
               t("axis_price_kind", sym=sym, kind=t("price_real" if use_real else "price_nominal")), t("axis_units"))
@@ -671,9 +702,11 @@ with charts_area:
         st.plotly_chart(fig, width="stretch")
     with right:
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=agg.index, y=agg["Price_Charged"], name=t("chart_your_price"), line=dict(color=col["s1"], width=2)))
+        fig.add_trace(go.Scatter(x=agg.index, y=agg["Price_Charged"], name=t("chart_your_price"),
+                                 line=dict(color=col["s1"], width=2)))
         if "Competitor_Price" in agg:
-            fig.add_trace(go.Scatter(x=agg.index, y=agg["Competitor_Price"], name=t("chart_comp_price"), line=dict(color=col["s2"], width=2)))
+            fig.add_trace(go.Scatter(x=agg.index, y=agg["Competitor_Price"], name=t("chart_comp_price"),
+                                     line=dict(color=col["s2"], width=2)))
         if use_real and infl.series is not None:
             fig.add_trace(go.Scatter(x=agg.index, y=agg["Real_Price"], name=t("chart_real_price"),
                                      line=dict(color=col["s3"], width=2, dash="dot")))
@@ -772,7 +805,8 @@ if test_result is None:
     st.caption(t("test_need_more"))
 else:
     text = t(f"test_verdict_{test_result.code}", observed=num(test_result.observed_diff, "+,.0f"),
-             expected=num(plan.diff, "+,.0f"), low=num(test_result.ci[0], "+,.0f"), high=num(test_result.ci[1], "+,.0f"),
+             expected=num(plan.diff, "+,.0f"), low=num(test_result.ci[0], "+,.0f"),
+             high=num(test_result.ci[1], "+,.0f"),
              e_obs=num(test_result.elasticity_observed, ".2f"), e_model=num(test_result.elasticity_model, ".2f"))
     (st.success if test_result.code == "consistent" else st.warning)(text)
     if abs(test_result.level_ratio - 1) > 0.2:
@@ -790,7 +824,8 @@ with st.expander(t("details_expander")):
         model_rows = []
         for kind, m in models.items():
             b = backtests[kind]
-            errors = (num(b.wape * 100, ".1f", "%"), num(b.naive_wape * 100, ".1f", "%")) if b is not None else ("—", "—")
+            errors = ((num(b.wape * 100, ".1f", "%"), num(b.naive_wape * 100, ".1f", "%")) if b is not None
+                      else ("—", "—"))
             fit = (None, None, None) if isinstance(m, Exception) else (round(m.r2, 3), m.n, round(m.b, 3))
             model_rows.append(dict(zip(columns, (t(f"model_{kind}"), *errors, *fit))))
         model_table = pd.DataFrame(model_rows)
@@ -806,7 +841,9 @@ with st.expander(t("details_expander")):
                 st.markdown(f"- {localize(n, lang)}")
         else:
             st.markdown(f"- {t('details_no_issues')}")
-        st.markdown(f"- {t('details_months', n=len(agg), start=month_year(agg.index.min()), end=month_year(agg.index.max()))}")
+        months_text = t("details_months", n=len(agg), start=month_year(agg.index.min()),
+                        end=month_year(agg.index.max()))
+        st.markdown(f"- {months_text}")
     if bt is not None:
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=bt.months, y=bt.actual, name=t("chart_actual"), mode="lines+markers",
@@ -837,7 +874,8 @@ summary = ([(t("product_label"), product)] if product else []) + [
     (t("trend_label"), on_off(model.trend is not None)),
     (t("real_label"), on_off(use_real)),
     (t("sum_current_price"), money(current_price, sym)),
-    (t("metric_rec_price"), f"{money(rec.price, sym)} · {t('metric_opt_delta', pct=(rec.price / current_price - 1) * 100)}"),
+    (t("metric_rec_price"),
+     f"{money(rec.price, sym)} · {t('metric_opt_delta', pct=(rec.price / current_price - 1) * 100)}"),
     (t("sum_unconstrained"), money(unconstrained, sym)),
     (t("sum_limits"), limits or t("sum_none")),
     (t("sum_range"), f"{money(price_range[0], sym)} – {money(price_range[1], sym)}" if price_range else "—"),
@@ -916,12 +954,14 @@ chart = Chart(
             Series(t("chart_total_cost"), curve["total_cost"].to_numpy(), PALETTE["light"]["s3"])],
     xlabel=t("axis_price", sym=sym),
     vlines=[VLine(rec.price, t("chart_recommended", price=money(rec.price, sym)), PALETTE["light"]["s1"]),
-            VLine(current_price, t("chart_current", price=money(current_price, sym)), PALETTE["light"]["muted"], dashed=True)],
+            VLine(current_price, t("chart_current", price=money(current_price, sym)), PALETTE["light"]["muted"],
+                  dashed=True)],
     band=(price_range[0], price_range[1], t("chart_range")) if price_range else None,
 )
 title = t("app_title") + (f" · {product}" if product else "")
 subtitle = t("app_caption", country=t(f"country_{country}"), currency=COUNTRY_MAP[country]["currency"])
-stem = "pricing_" + "".join(ch if ch.isalnum() else "_" for ch in str(product or "results")) + f"_{date.today():%Y-%m-%d}"
+safe_name = "".join(ch if ch.isalnum() else "_" for ch in str(product or "results"))
+stem = f"pricing_{safe_name}_{date.today():%Y-%m-%d}"
 
 st.divider()
 st.subheader(t("export_header"))
@@ -947,13 +987,16 @@ actual_units = pd.to_numeric(edited[t("col_actual")], errors="coerce")
 current_settings = dict(
     drop_dupes=drop_dupes, country=country, timeframe=timeframe, default_cogs=default_cogs,
     cost_override=cost_override, fixed_monthly=fixed_monthly, capacity=capacity, import_share=import_share,
-    model_kind=model_choice, use_real=use_real, use_season=seasonal, use_trend=use_trend, product=product, max_price=max_price,
+    model_kind=model_choice, use_real=use_real, use_season=seasonal, use_trend=use_trend, product=product,
+    max_price=max_price,
     variable_fees=fee_pct, prices_incl_vat=prices_incl_vat, vat_rate=vat_rate,
     extra_unit_cost=extra_cost, max_change=max_change, min_margin=min_margin, price_floor=price_floor,
     price_ceiling=price_ceiling, ending=ending,
     # The sliders' own values: match_cut/rise are forced to 0 when the data has no competitor column
-    comp_match_cut=st.session_state.get("comp_match_cut", 0), comp_match_rise=st.session_state.get("comp_match_rise", 0),
-    shock_infl=inflation, shock_usd_infl=usd_infl_pct, shock_fx=fx_shift, shock_comp=comp_shift, shock_passthrough=passthrough, test_step=test_step,
+    comp_match_cut=st.session_state.get("comp_match_cut", 0),
+    comp_match_rise=st.session_state.get("comp_match_rise", 0),
+    shock_infl=inflation, shock_usd_infl=usd_infl_pct, shock_fx=fx_shift, shock_comp=comp_shift,
+    shock_passthrough=passthrough, test_step=test_step,
 )
 saved_test = ({"test_price": plan.test_price, "current_price": current_price, "weeks": plan.weeks,
                "actual": [None if pd.isna(a) else float(a) for a in actual_units]}

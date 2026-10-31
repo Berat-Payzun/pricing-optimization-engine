@@ -1,0 +1,17 @@
+# Lint settings (checked in CI). Run locally with: ruff check .
+line-length = 120
+target-version = "py312"
+
+[lint]
+# pycodestyle, pyflakes, warnings, import order, bugbear, pyupgrade
+select = ["E", "F", "W", "I", "B", "UP"]
+# zip() pairs columns of one table here; strict= would add noise without catching anything
+ignore = ["B905"]
+
+[lint.per-file-ignores]
+# UI strings in three languages are long by nature
+"src/translations.py" = ["E501"]
+
+[lint.isort]
+# src/ modules are imported by bare name (the app and the tests put src/ on the path)
+known-first-party = ["config", "data_ingestion", "macro_api", "optimizer", "portfolio", "report", "scenarios", "translations"]
