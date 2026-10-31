@@ -11,6 +11,8 @@ to a monthly index. Series were verified live on 2026-10-26:
   Italy, Spain, Turkey, UK: 2025-03; Brazil: 2025-04). EU countries and Turkey therefore use
   Eurostat's HICP (CP0000xxM086NEST), the UK the ONS CPI index (D7BT), and Brazil the OECD's
   live SDMX API, each with the stale MEI series kept as a fallback.
+- The US falls back from the seasonally adjusted CPI-U (CPIAUCSL) to the unadjusted one
+  (CPIAUCNS); their 12-month changes are nearly identical.
 - "EU" is the euro-area average (HICP for the 19-country euro area), not any single country.
 - FRED has no Turkish lira daily FX series (DEXTKUS returns 404), so TRY relies on Yahoo only.
 - "vat" is the standard VAT rate (%) used as the default when prices include VAT. "EU" uses 19%
@@ -26,7 +28,7 @@ COUNTRY_MAP = {
         "currency": "USD",
         "symbol": "$",
         "vat": 0,
-        "cpi_sources": [("fred", "CPIAUCSL")],
+        "cpi_sources": [("fred", "CPIAUCSL"), ("fred", "CPIAUCNS")],
         "fx_yahoo": None,
         "fx_fred": None,
         "fx_invert": False,

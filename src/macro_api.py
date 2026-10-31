@@ -6,7 +6,8 @@ to manual inputs when a source is offline.
 FRED is read through its official API with the key in the FRED_API_KEY environment
 variable (the app copies it there from Streamlit secrets). Without a key FRED series are
 not fetched and the built-in fallback values are used. The key travels in the request URL,
-so FRED errors are re-raised without the original exception and never show it.
+so FRED errors are re-raised without the original exception and never show it. FRED now and
+then answers with a 5xx error or times out, so those requests are retried twice.
 
 ONS and OECD requests go through `curl_cffi` (already a yfinance dependency) with browser
 headers, falling back to plain `requests`.
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import io
 import os
+import time
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -28,6 +30,7 @@ FRED_KEY_ENV = "FRED_API_KEY"
 ONS_URL = "https://www.ons.gov.uk/economy/inflationandpriceindices/timeseries/{}/data"
 OECD_URL = "https://sdmx.oecd.org/public/rest/data/OECD.SDD.TPS,DSD_PRICES@DF_PRICES_ALL,1.0/{}"
 TIMEOUT = 20
+FRED_RETRY_WAITS = (1.0, 2.0)  # seconds before the 2nd and 3rd attempt (5xx, 429, network errors)
 
 BROWSER_HEADERS = {
     "User-Agent": (
@@ -47,6 +50,7 @@ class MacroValue:
     ok: bool
     change_pct: float | None = None  # FX only: 12-month % change
     series: pd.Series | None = field(default=None, repr=False)  # CPI only: full index
+    fetched_at: float = field(default_factory=time.time, repr=False)  # epoch seconds
 
 
 def http_get(url: str, params: dict | None = None):
@@ -80,14 +84,20 @@ def fetch_fred_series(series_id: str) -> pd.Series:
     if key is None:
         raise FredKeyMissing("No FRED API key configured")
     params = {"series_id": series_id, "api_key": key, "file_type": "json"}
-    try:
-        resp = requests.get(FRED_API_URL, params=params, timeout=TIMEOUT)
-    except requests.RequestException as e:
-        # The exception text holds the URL, and the URL holds the key: drop it
-        raise ValueError(f"FRED API unreachable for {series_id} ({type(e).__name__})") from None
-    if resp.status_code != 200:
-        raise ValueError(f"FRED API HTTP {resp.status_code} for {series_id}")
-    return parse_fred_json(resp.json(), series_id)
+    for wait in (0.0, *FRED_RETRY_WAITS):
+        time.sleep(wait)
+        try:
+            resp = requests.get(FRED_API_URL, params=params, timeout=TIMEOUT)
+        except requests.RequestException as e:
+            # The exception text holds the URL, and the URL holds the key: keep only its type
+            error = f"FRED API unreachable for {series_id} ({type(e).__name__})"
+            continue
+        if resp.status_code == 200:
+            return parse_fred_json(resp.json(), series_id)
+        error = f"FRED API HTTP {resp.status_code} for {series_id}"
+        if resp.status_code < 500 and resp.status_code != 429:
+            break  # a bad key or series ID won't fix itself
+    raise ValueError(error)
 
 
 def parse_fred_json(data: dict, name: str) -> pd.Series:
