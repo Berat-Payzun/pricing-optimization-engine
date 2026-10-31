@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from config import COUNTRY_MAP, PERIOD_MULT
 from optimizer import ENDINGS
@@ -91,7 +91,7 @@ def dump(settings: dict, test_plan: dict | None, data: dict) -> bytes:
     doc = {
         "app": APP_ID,
         "schema": SCHEMA,
-        "saved_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "saved_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "data": data,
         "settings": clean,
         "test_plan": test_plan,

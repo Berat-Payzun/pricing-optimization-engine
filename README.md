@@ -1,10 +1,31 @@
 # Pricing Optimization Engine
 
+[![Live demo](https://img.shields.io/badge/demo-live-FF4B4B?logo=streamlit&logoColor=white)](https://pricing-optimization-engine.streamlit.app)
 [![tests](https://github.com/Berat-Payzun/pricing-optimization-engine/actions/workflows/tests.yml/badge.svg)](https://github.com/Berat-Payzun/pricing-optimization-engine/actions/workflows/tests.yml)
 
 A Streamlit app that finds the **profit-maximizing price** for a product from its sales history and stress-tests it against **live macroeconomic data**: CPI inflation and exchange rates for the selected country.
 
 Upload a CSV or Excel file of past prices and quantities. The engine fits a demand curve, sweeps 2,000 candidate prices, and charts revenue, cost and net profit against price. The headline is a **recommended price for today**: today's costs and price level, after VAT and channel fees, within your guardrails. Separately, sliders simulate the next 12 months of inflation, currency and competitor shocks.
+
+**Try it:** [pricing-optimization-engine.streamlit.app](https://pricing-optimization-engine.streamlit.app) opens with a four-product sample file loaded, so there's nothing to upload.
+
+![The app on the bundled sample data: recommended price, profit, elasticity with its confidence interval, backtest error and live CPI, above the profit / revenue / cost curve](assets/screenshot.png)
+
+## How it works
+
+```mermaid
+flowchart LR
+    A[Sales file<br/>CSV / Excel] --> B[Clean & aggregate<br/>monthly, flags, duplicates]
+    M[(FRED · ONS · OECD<br/>Yahoo Finance)] --> C
+    B --> C[Deflate prices<br/>with CPI]
+    C --> D[Fit demand<br/>linear & log-log<br/>season · trend]
+    D --> E[Backtest<br/>Auto picks the model]
+    E --> F[Profit sweep<br/>2,000 prices<br/>fees · VAT · FX · inflation]
+    F --> G[Guardrails<br/>max change · margin<br/>floor · ceiling · endings]
+    G --> H[Recommended price]
+    H --> I[Bootstrap range<br/>tornado · price test]
+    H --> J[Excel / PDF<br/>All products table]
+```
 
 ## Features
 
@@ -18,7 +39,7 @@ Upload a CSV or Excel file of past prices and quantities. The engine fits a dema
 - **Price test plan:** a controlled test that checks the demand estimate. It alternates the current and a test price week by week, so seasons and trends affect both alike. You choose the test price step (10% by default); the app shows the weeks needed for that step, given your sales' normal week-to-week variation, and a chart of how a bigger step shortens the test. The plan lists expected weekly units with 90% bands. Type in actual weekly units and the app says whether customers react as the model expects, or are more or less price-sensitive. The plan is in the Excel export with an empty Actual column.
 - **Uncertainty range:** a bootstrap (200 refits on resampled months) gives a 90% range for the optimal price, shown under the metric and as a band on the chart when no guardrail binds.
 - **Elasticity confidence:** the same bootstrap gives a 90% confidence interval for the price elasticity at the recommended price, with a high / medium / low confidence badge (from the interval's width relative to its centre; low whenever the interval includes zero).
-- **Sensitivity (tornado chart):** "What moves the optimal price?" re-runs today's optimization with each input moved ±10% (unit cost, price sensitivity, variable selling costs, VAT, exchange rate, competitor price) and ranks them by how far the optimal price moves. Also in the Excel export.
+- **Sensitivity (tornado chart):** "What moves the optimal price?" re-runs today's optimization with each input moved ±10% (unit cost, price sensitivity, variable selling costs, VAT, exchange rate, competitor price; inflation by ±10 percentage points) and ranks them by how far the optimal price moves. Also in the Excel export.
 - **Competitor-aware (optional):** if the CSV has competitor prices, the model estimates the cross-price effect (XED) and enables a competitor-shock slider.
 - **Competitor reaction:** two sliders set how much of your price cuts and of your rises the competitor copies (both 0% by default, the optimistic case). The reaction feeds the recommendation, the scenario and the 90% range, and the headline shows what the price would be without a reaction. The weekly price test keeps the competitor fixed.
 - **Inflation-adjusted history:** historical prices are deflated with the country's CPI before fitting. Without this, in high-inflation economies like Turkey, nominal price rises would be mistaken for real ones.
@@ -73,7 +94,7 @@ The app opens with `sample_data.csv` loaded: four products with known demand cur
 | Gift Set | 36 months | `Q/day = (60 − 0.8·P + 0.4·P_comp) × season` (Nov/Dec peak), December stockouts flagged | Turn on seasonality: the backtest error drops |
 | New Tumbler | 2 months | Just launched | Too few months to price: the **All products** table shows why |
 
-Run the tests with `pytest`.
+Run the tests with `pytest` and the linter with `ruff check .` (both run in CI).
 
 ## File format (CSV or Excel)
 
@@ -151,8 +172,10 @@ For linear demand without a capacity cap, the result matches the closed-form opt
 ## Project structure
 
 ```
-├── .github/workflows/tests.yml   # runs pytest with coverage on every push and pull request
+├── .github/workflows/tests.yml   # runs Ruff and pytest with coverage on every push and pull request
 ├── assets/fonts/          # DejaVu Sans for the PDF export (covers Turkish letters and ₺)
+├── assets/screenshot.png  # README screenshot
+├── ruff.toml              # lint settings
 ├── sample_data.csv
 ├── scripts/generate_sample_data.py
 ├── src/

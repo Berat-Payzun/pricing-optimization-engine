@@ -59,3 +59,23 @@ def test_too_short_product_shows_an_error_not_a_crash(app):
     app.selectbox(key="product").set_value("New Tumbler").run()
     assert not app.exception
     assert any("Only 2 month(s)" in e.value for e in app.error)
+
+
+def test_fees_eating_the_whole_price_show_the_no_profit_card(app):
+    app.number_input(key="variable_fees").set_value(90.0)
+    app.toggle(key="prices_incl_vat").set_value(True).run()
+    app.number_input(key="vat_US").set_value(20.0)  # US VAT is 0 by default; 90% fees > 1/1.2 net share
+    app.run()
+    assert not app.exception
+    assert any("No price covers the variable costs" in e.value for e in app.error)
+    assert any("take the whole net price" in w.value for w in app.sidebar.warning)
+    assert not any("range of the optimum" in c.value for c in app.caption)  # no 90% range
+
+
+def test_turkish_ui_formats_money_the_turkish_way(app):
+    app.selectbox(key="lang").set_value("tr").run()
+    assert not app.exception
+    rec = app.metric[0].value
+    assert rec.endswith(" $") and "," in rec  # e.g. "53,48 $" (sample data in the default country, US)
+    table = next(df.value for df in app.dataframe if "Ürün" in df.value.columns)
+    assert all(v == "—" or v.endswith(" $") for v in table.iloc[:, 3])

@@ -2,7 +2,6 @@ import io
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from data_ingestion import load_csv
 from optimizer import Guardrails
@@ -42,3 +41,14 @@ def test_guardrails_and_contribution_apply_to_every_product():
     assert (pf["change"].abs() <= 0.05 + 0.02).all()  # within ±5%, plus rounding to .99
     assert all(f"{p:.2f}".endswith(".99") for p in pf["rec_price"])
     assert (pf["model"] == "linear").all()
+
+
+def test_products_without_sales_or_without_a_profitable_price_say_so():
+    lines = ["Date,Product,Price_Charged,Quantity_Sold,Cost_Per_Unit"]
+    for i, d in enumerate(pd.date_range("2024-01-01", periods=12, freq="MS")):
+        lines.append(f"{d.date()},Dead,{10 + i},0,5")  # never sold
+        lines.append(f"{d.date()},Costly,{20 + i},{600 - 20 * (20 + i)},500")  # costs more than anyone pays
+    rows, _ = load_csv(io.StringIO("\n".join(lines)), default_cogs=5)
+    pf = portfolio(rows, None, "linear", False, False, SHARED, Guardrails()).set_index("product")
+    assert pf.loc["Dead", "status"] == "error" and pf.loc["Dead", "error"].key == "err_no_sales"
+    assert pf.loc["Costly", "status"] == "no_profit"

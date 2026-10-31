@@ -13,8 +13,18 @@ import numpy as np
 import pandas as pd
 
 from data_ingestion import PRODUCT, DataValidationError, aggregate, deflate
-from optimizer import (DemandModel, Guardrails, ScenarioParams, backtest, best_model, competitor_price_at,
-                       elasticities, fit_demand, recommend, run_scenario)
+from optimizer import (
+    DemandModel,
+    Guardrails,
+    ScenarioParams,
+    backtest,
+    best_model,
+    competitor_price_at,
+    elasticities,
+    fit_demand,
+    recommend,
+    run_scenario,
+)
 
 COLUMNS = ["product", "months", "model", "current_price", "rec_price", "change", "ped", "contribution_current",
            "contribution_rec", "uplift", "wape", "status", "error"]
@@ -66,7 +76,7 @@ def portfolio(rows: pd.DataFrame, cpi: pd.Series | None, model_choice: str, seas
                 contribution_current=result.baseline["profit"], contribution_rec=rec.row["profit"],
                 uplift=rec.row["profit"] - result.baseline["profit"],
                 wape=bt.wape if bt is not None else float("nan"),
-                status="ok" if result.interior else "no_optimum",
+                status="no_profit" if not result.viable else "ok" if result.interior else "no_optimum",
             )
         except (DataValidationError, ValueError) as e:
             row.update(status="error", error=e.args[0] if e.args else str(e))

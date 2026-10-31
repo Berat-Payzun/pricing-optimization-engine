@@ -7,9 +7,11 @@ from scenarios import ScenarioError, dump, load, plan_matches, session_updates
 
 SETTINGS = {
     "country": "TR", "timeframe": "Monthly", "default_cogs": 10.0, "capacity": 0, "import_share": 30,
-    "model_kind": "loglog", "use_real": True, "use_trend": True, "product": "Kahve", "max_price": 120.0, "variable_fees": 15.0,
+    "model_kind": "loglog", "use_real": True, "use_trend": True, "product": "Kahve", "max_price": 120.0,
+    "variable_fees": 15.0,
     "prices_incl_vat": True, "vat_rate": 20.0, "max_change": 15.0, "ending": ".99", "comp_match_cut": 50,
-    "comp_match_rise": 0, "shock_infl": 29.5, "shock_usd_infl": 3.7, "shock_fx": 18.5, "shock_passthrough": False, "test_step": 10.0,
+    "comp_match_rise": 0, "shock_infl": 29.5, "shock_usd_infl": 3.7, "shock_fx": 18.5, "shock_passthrough": False,
+    "test_step": 10.0,
 }
 PLAN = {"test_price": 65.37, "current_price": 59.43, "weeks": 4, "actual": [310.0, None, 298.0, 371.0]}
 DATA = {"sha256": "ab" * 32, "file_name": "satislar.xlsx", "product": "Kahve"}

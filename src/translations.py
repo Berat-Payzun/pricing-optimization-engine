@@ -561,6 +561,7 @@ STRINGS: dict[str, dict[str, str]] = {
     "pf_col_status": {"en": "Status", "tr": "Durum", "de": "Status"},
     "pf_status_ok": {"en": "OK", "tr": "Tamam", "de": "OK"},
     "pf_status_no_optimum": {"en": "No optimum in range", "tr": "Aralıkta optimum yok", "de": "Kein Optimum im Bereich"},
+    "pf_status_no_profit": {"en": "No profitable price", "tr": "Kârlı fiyat yok", "de": "Kein profitabler Preis"},
     # ---------- export ----------
     "export_header": {"en": "Export", "tr": "Dışa aktar", "de": "Export"},
     "export_caption": {
@@ -1120,6 +1121,44 @@ STRINGS: dict[str, dict[str, str]] = {
               "({max}) weiter. Der empfohlene Preis ist die Grenze Ihrer Preisregeln, kein Optimum, und der "
               "90%-Bereich ist ausgeblendet. Führen Sie einen Preistest durch, bevor Sie sich darauf verlassen.",
     },
+    "err_no_interior_low": {
+        "en": "No profit-maximizing price inside the tested range: profit keeps rising as the price falls, down "
+              "to the lowest price tested ({min}). This usually means the unit cost is missing or zero. The "
+              "recommended price is the edge of your guardrails, not an optimum, and the 90% range is hidden.",
+        "tr": "Denenen aralıkta kârı en üst düzeye çıkaran bir fiyat yok: kâr, fiyat düştükçe denenen en düşük "
+              "fiyata ({min}) kadar artmaya devam ediyor. Bu genellikle birim maliyetin eksik ya da sıfır olduğu "
+              "anlamına gelir. Önerilen fiyat bir optimum değil, fiyat kurallarınızın sınırıdır ve %90 aralık gizlendi.",
+        "de": "Kein gewinnmaximaler Preis im getesteten Bereich: Der Gewinn steigt mit sinkendem Preis bis zum "
+              "niedrigsten Testpreis ({min}) weiter. Meist fehlen die Stückkosten oder sind null. Der empfohlene "
+              "Preis ist die Grenze Ihrer Preisregeln, kein Optimum, und der 90%-Bereich ist ausgeblendet.",
+    },
+    "err_no_profit": {
+        "en": "No price covers the variable costs: at every price tested, unit cost, selling costs and VAT take "
+              "more than the price brings in, so every unit sold loses money. The figures shown are not a "
+              "recommendation. Check the unit cost, the variable selling costs % and the VAT setting.",
+        "tr": "Hiçbir fiyat değişken maliyetleri karşılamıyor: denenen her fiyatta birim maliyet, satış giderleri "
+              "ve KDV fiyattan fazlasını götürüyor, yani satılan her birim zarar ettiriyor. Gösterilen değerler bir "
+              "öneri değildir. Birim maliyeti, değişken satış giderleri yüzdesini ve KDV ayarını kontrol edin.",
+        "de": "Kein Preis deckt die variablen Kosten: Bei jedem getesteten Preis kosten Stückkosten, "
+              "Vertriebskosten und MwSt. mehr, als der Preis einbringt, jede verkaufte Einheit bringt also "
+              "Verlust. Die angezeigten Werte sind keine Empfehlung. Prüfen Sie Stückkosten, variable "
+              "Vertriebskosten in % und die MwSt.-Einstellung.",
+    },
+    "err_no_sales": {
+        "en": "The data has no sales: quantity sold is 0 in every month used for the fit, so demand can't be "
+              "estimated.",
+        "tr": "Veride satış yok: tahminde kullanılan her ayda satılan adet 0, bu yüzden talep tahmin edilemiyor.",
+        "de": "Die Daten enthalten keine Verkäufe: Die verkaufte Menge ist in jedem für die Schätzung genutzten "
+              "Monat 0, daher lässt sich die Nachfrage nicht schätzen.",
+    },
+    "warn_fees_exceed_price": {
+        "en": "Variable selling costs ({fees:.1f}%) take the whole net price after VAT ({net:.1f}% of the "
+              "price): every sale loses money at any price.",
+        "tr": "Değişken satış giderleri (%{fees:.1f}), KDV sonrası net fiyatın tamamını alıyor (fiyatın "
+              "%{net:.1f}'i): her fiyatta her satış zarar ettirir.",
+        "de": "Die variablen Vertriebskosten ({fees:.1f} %) verbrauchen den gesamten Nettopreis nach MwSt. "
+              "({net:.1f} % des Preises): Jeder Verkauf bringt bei jedem Preis Verlust.",
+    },
     "err_too_few_months": {
         "en": "Only {n} month(s) of data: at least {min_n} are needed to fit demand.",
         "tr": "Yalnızca {n} aylık veri var: talebi tahmin etmek için en az {min_n} ay gerekir.",
@@ -1287,13 +1326,55 @@ STRINGS: dict[str, dict[str, str]] = {
 }
 
 
+DECIMAL_COMMA = {"tr", "de"}  # languages that write 1.234,56 instead of 1,234.56
+_SWAP = str.maketrans(",.", ".,")
+
+
+def fmt_number(x: float, spec: str, lang: str) -> str:
+    """`format(x, spec)` with the separators of `lang` (1.234,56 in Turkish and German)."""
+    text = format(x, spec)
+    return text.translate(_SWAP) if lang in DECIMAL_COMMA else text
+
+
+def fmt_money(x: float, sym: str, lang: str, decimals: int = 2) -> str:
+    """An amount with its currency symbol: $1,234.56 in English, 1.234,56 ₺ in Turkish and German.
+    No minus sign on an amount that rounds to zero."""
+    amount = fmt_number(abs(x), f",.{decimals}f", lang)
+    sign = "-" if x < 0 and round(abs(x), decimals) > 0 else ""
+    return f"{sign}{amount} {sym}" if lang in DECIMAL_COMMA else f"{sign}{sym}{amount}"
+
+
+class _LocalFloat(float):
+    """A float that formats with a language's separators inside str.format (see translate)."""
+    lang = "en"
+
+    def __format__(self, spec: str) -> str:
+        return fmt_number(float(self), spec, self.lang)
+
+
+class _LocalInt(int):
+    lang = "en"
+
+    def __format__(self, spec: str) -> str:
+        return fmt_number(int(self), spec, self.lang)
+
+
+def _localized(value, lang: str):
+    if lang not in DECIMAL_COMMA or isinstance(value, bool) or not isinstance(value, (int, float)):
+        return value
+    out = (_LocalFloat if isinstance(value, float) else _LocalInt)(value)
+    out.lang = lang
+    return out
+
+
 def translate(key: str, lang: str = "en", **params) -> str:
-    """Render `key` in `lang`, falling back to English, then to the key itself."""
+    """Render `key` in `lang`, falling back to English, then to the key itself. Numbers in the
+    text use the language's separators."""
     entry = STRINGS.get(key)
     if entry is None:
         return key
     text = entry.get(lang) or entry["en"]
-    return text.format(**params) if params else text
+    return text.format(**{k: _localized(v, lang) for k, v in params.items()}) if params else text
 
 
 class Msg(str):

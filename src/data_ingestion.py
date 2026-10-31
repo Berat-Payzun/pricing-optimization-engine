@@ -7,6 +7,7 @@ import re
 import unicodedata
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from config import CPI_STALE_MONTHS, MIN_PERIODS_FIT, MIN_PERIODS_WARN
@@ -16,6 +17,7 @@ REQUIRED = ["Date", "Price_Charged", "Quantity_Sold"]
 OPTIONAL = ["Cost_Per_Unit", "Competitor_Price"]
 PRODUCT = "Product"  # optional text column: one file may hold several products
 FLAG = "Flag"  # optional text column marking stockout / promo rows, left out of the demand fit
+MAX_VALUE = 1e15  # larger numbers are no real price, cost or quantity (₺1 quadrillion); treated as missing
 
 # Header aliases in English, Turkish and German, written in folded form (see fold_header)
 ALIASES = {
@@ -136,7 +138,10 @@ def load_csv(source, default_cogs: float, drop_duplicates: bool = True) -> tuple
     df = df[[c for c in REQUIRED + OPTIONAL + [PRODUCT, FLAG] if c in df.columns]].copy()
     df["Date"] = to_dates(df["Date"])
     for col in df.columns.drop(["Date", PRODUCT, FLAG], errors="ignore"):
-        df[col] = to_number(df[col], decimal_comma)
+        number = to_number(df[col], decimal_comma)
+        # "inf" parses as a number, and 1e308 overflows the monthly sums: neither is a real price or
+        # quantity, so both count as missing (rows missing a required value are dropped and counted)
+        df[col] = number.where(np.isfinite(number) & (number.abs() < MAX_VALUE))
     if PRODUCT in df.columns:
         df[PRODUCT] = df[PRODUCT].fillna("").astype(str).str.strip().replace("", "—")
     if FLAG in df.columns:
@@ -262,6 +267,8 @@ def aggregate(df: pd.DataFrame, freq: str = "MS") -> tuple[pd.DataFrame, list[st
         raise DataValidationError(Msg("err_too_few_months", n=n, min_n=MIN_PERIODS_FIT))
     if n < MIN_PERIODS_WARN:
         warnings.append(Msg("warn_few_months", n=n, min_n=MIN_PERIODS_WARN))
+    if fit["Quantity_Sold"].sum() <= 0:
+        raise DataValidationError(Msg("err_no_sales"))
     if fit["Price_Charged"].nunique() < 2 or fit["Price_Charged"].std() < 1e-9:
         raise DataValidationError(Msg("err_price_constant"))
     return out, warnings

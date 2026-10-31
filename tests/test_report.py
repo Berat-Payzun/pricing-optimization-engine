@@ -54,7 +54,9 @@ def test_label_rows_stacks_only_overlapping_labels():
 def test_pdf_with_overlapping_markers_builds():
     x = np.linspace(10, 30, 50)
     chart = Chart("Profit", x, [Series("Profit", -(x - 17) ** 2 + 100, "#2a78d6")],
-                  vlines=[VLine(16.99, "Recommended $16.99", "#2a78d6"), VLine(17.10, "Unconstrained $17.10", "#898781"),
-                          VLine(16.89, "Current $16.89", "#898781", dashed=True), VLine(29.9, "Edge $29.90", "#898781")])
+                  vlines=[VLine(16.99, "Recommended $16.99", "#2a78d6"),
+                          VLine(17.10, "Unconstrained $17.10", "#898781"),
+                          VLine(16.89, "Current $16.89", "#898781", dashed=True),
+                          VLine(29.9, "Edge $29.90", "#898781")])
     pdf = build_pdf("T", "", [("Price", "$16.99")], chart)
     assert pdf[:4] == b"%PDF"
