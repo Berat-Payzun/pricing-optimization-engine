@@ -168,12 +168,24 @@ def load_csv(source, default_cogs: float, drop_duplicates: bool = True) -> tuple
         df["Cost_Per_Unit"] = default_cogs
         warnings.append(Msg("warn_no_cost_col"))
     else:
+        negative = df["Cost_Per_Unit"] < 0  # a typo or a credit note, never a unit cost
+        if negative.any():
+            df.loc[negative, "Cost_Per_Unit"] = float("nan")
+            warnings.append(Msg("warn_cost_negative", n=int(negative.sum())))
         n_missing = int(df["Cost_Per_Unit"].isna().sum())
         if n_missing:
             df["Cost_Per_Unit"] = df["Cost_Per_Unit"].fillna(default_cogs)
             warnings.append(Msg("warn_cost_filled", n=n_missing))
+    n_loss = int((df["Cost_Per_Unit"] > df["Price_Charged"]).sum())
+    if n_loss:  # can be real (loss leaders, clearance), but is often a unit mix-up
+        warnings.append(Msg("warn_cost_above_price", n=n_loss, n_raw=len(df)))
 
     if "Competitor_Price" in df.columns:
+        nonpositive = df["Competitor_Price"] <= 0
+        if nonpositive.any():  # treated as missing and filled like any other gap
+            df.loc[nonpositive, "Competitor_Price"] = float("nan")
+            warnings.append(Msg("warn_comp_nonpositive", n=int(nonpositive.sum())))
+
         def fill(s):
             return s.ffill().bfill()
 
@@ -214,6 +226,10 @@ def aggregate(df: pd.DataFrame, freq: str = "MS") -> tuple[pd.DataFrame, list[st
     the charts but marked Excluded from the demand fit.
     """
     warnings: list[str] = []
+    if "Competitor_Price" in df.columns and df["Competitor_Price"].isna().all():
+        # In a file with several products, only some may come with competitor prices
+        df = df.drop(columns="Competitor_Price")
+        warnings.append(Msg("warn_comp_empty"))
     out = _monthly(df, freq).dropna(subset=["Price_Charged"])  # months with no rows at all
     out.index.name = "Date"
 

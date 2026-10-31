@@ -430,7 +430,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "de": "Jan,Feb,Mär,Apr,Mai,Jun,Jul,Aug,Sep,Okt,Nov,Dez",
     },
     # ---------- uncertainty range ----------
-    "metric_opt_range": {"en": "90% range: {low} – {high}", "tr": "%90 aralık: {low} – {high}", "de": "90%-Bereich: {low} – {high}"},
+    "metric_opt_range": {"en": "90% range of the optimum: {low} – {high}", "tr": "Optimumun %90 aralığı: {low} – {high}",
+                         "de": "90%-Bereich des Optimums: {low} – {high}"},
     "metric_opt_range_help": {
         "en": "Bootstrap: the demand model was refitted on {n} resampled versions of your history, and 90% of the "
               "resulting optimal prices fell in this range. A wide range means the data pins the price down only weakly.",
@@ -440,7 +441,7 @@ STRINGS: dict[str, dict[str, str]] = {
               "optimalen Preise lagen in diesem Bereich. Ein breiter Bereich heißt, dass die Daten den Preis nur "
               "schwach festlegen.",
     },
-    "chart_range": {"en": "90% range", "tr": "%90 aralık", "de": "90%-Bereich"},
+    "chart_range": {"en": "90% range of the optimum", "tr": "Optimumun %90 aralığı", "de": "90%-Bereich des Optimums"},
     # ---------- export ----------
     "export_header": {"en": "Export", "tr": "Dışa aktar", "de": "Export"},
     "export_caption": {
@@ -955,6 +956,43 @@ STRINGS: dict[str, dict[str, str]] = {
         "tr": "Competitor_Price sütunu boş: rakip etkileri devre dışı.",
         "de": "Spalte Competitor_Price ist leer: Konkurrenzeffekte deaktiviert.",
     },
+    "warn_comp_nonpositive": {
+        "en": "{n} Competitor_Price values were zero or negative and were treated as missing.",
+        "tr": "{n} Competitor_Price değeri sıfır veya negatifti ve eksik kabul edildi.",
+        "de": "{n} Competitor_Price-Werte waren null oder negativ und wurden als fehlend behandelt.",
+    },
+    "warn_cost_negative": {
+        "en": "{n} Cost_Per_Unit values were negative and were replaced with the default COGS.",
+        "tr": "{n} Cost_Per_Unit değeri negatifti ve varsayılan SMM ile değiştirildi.",
+        "de": "{n} Cost_Per_Unit-Werte waren negativ und wurden durch die Standard-Stückkosten ersetzt.",
+    },
+    "warn_cost_above_price": {
+        "en": "In {n} of {n_raw} rows the unit cost is above the price charged. Check that cost and price use "
+              "the same unit and currency.",
+        "tr": "{n_raw} satırın {n} tanesinde birim maliyet satış fiyatından yüksek. Maliyet ve fiyatın aynı birim "
+              "ve para biriminde olduğunu kontrol edin.",
+        "de": "In {n} von {n_raw} Zeilen liegen die Stückkosten über dem Verkaufspreis. Prüfen Sie, ob Kosten und "
+              "Preis dieselbe Einheit und Währung haben.",
+    },
+    "warn_comp_sign": {
+        "en": "Fitted demand falls when the competitor's price rises, the opposite of what a substitute does. "
+              "The competitor effect is probably mixed up with other demand drivers; treat it with caution.",
+        "tr": "Tahmini talep, rakip fiyatı arttığında düşüyor; bu bir ikame ürünün beklenen davranışının tersi. "
+              "Rakip etkisi büyük olasılıkla başka talep etkenleriyle karışıyor; temkinle değerlendirin.",
+        "de": "Die geschätzte Nachfrage sinkt, wenn der Konkurrenzpreis steigt, das Gegenteil eines Substituts. "
+              "Der Konkurrenzeffekt ist vermutlich mit anderen Nachfragetreibern vermischt; mit Vorsicht behandeln.",
+    },
+    "err_no_interior": {
+        "en": "No profit-maximizing price inside the tested range: profit keeps rising up to the max price to "
+              "test ({max}). The recommended price is the edge of your guardrails, not an optimum, and the 90% "
+              "range is hidden. Run a price test before relying on it.",
+        "tr": "Denenen aralıkta kârı en üst düzeye çıkaran bir fiyat yok: kâr, denenecek en yüksek fiyata ({max}) "
+              "kadar artmaya devam ediyor. Önerilen fiyat bir optimum değil, fiyat kurallarınızın sınırıdır ve %90 "
+              "aralık gizlendi. Ona güvenmeden önce bir fiyat testi yapın.",
+        "de": "Kein gewinnmaximaler Preis im getesteten Bereich: Der Gewinn steigt bis zum höchsten Testpreis "
+              "({max}) weiter. Der empfohlene Preis ist die Grenze Ihrer Preisregeln, kein Optimum, und der "
+              "90%-Bereich ist ausgeblendet. Führen Sie einen Preistest durch, bevor Sie sich darauf verlassen.",
+    },
     "err_too_few_months": {
         "en": "Only {n} month(s) of data: at least {min_n} are needed to fit demand.",
         "tr": "Yalnızca {n} aylık veri var: talebi tahmin etmek için en az {min_n} ay gerekir.",
@@ -1087,6 +1125,16 @@ STRINGS: dict[str, dict[str, str]] = {
               "Daha büyük bir adımı test etmek için 'En fazla değişim' veya taban/tavan fiyatı genişletin.",
         "de": "Ein Schritt von {step:.1f} % überschreitet Ihre Preisregeln, daher bleibt der Testpreis bei "
               "{price:,.2f}. Erweitern Sie „Max. Änderung“ oder Unter-/Obergrenze, um einen größeren Schritt zu testen.",
+    },
+    "warn_test_no_change": {
+        "en": "Within your guardrails and price ending the test price stays at the current price ({price:,.2f}), "
+              "so there is nothing to test. Widen 'Max change' or the floor/ceiling, or pick another price ending.",
+        "tr": "Fiyat kurallarınız ve fiyat bitişiyle test fiyatı mevcut fiyatta ({price:,.2f}) kalıyor, bu yüzden "
+              "test edilecek bir şey yok. 'En fazla değişim' veya taban/tavan fiyatı genişletin ya da başka bir "
+              "fiyat bitişi seçin.",
+        "de": "Mit Ihren Preisregeln und der Preisendung bleibt der Testpreis beim aktuellen Preis ({price:,.2f}), "
+              "es gibt also nichts zu testen. Erweitern Sie „Max. Änderung“ oder Unter-/Obergrenze oder wählen Sie "
+              "eine andere Preisendung.",
     },
     "warn_guardrail_conflict": {
         "en": "The price floor/ceiling lies outside the allowed step from the current price: the max-change "

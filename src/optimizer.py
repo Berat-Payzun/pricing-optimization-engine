@@ -171,6 +171,8 @@ def fit_demand(agg: pd.DataFrame, kind: str = "linear", seasonal: bool = False) 
         model.warnings.append(Msg("warn_upward_slope"))
     if kind == "loglog" and -1 < model.b < 0:
         model.warnings.append(Msg("warn_inelastic", b=model.b))
+    if model.has_comp and model.c < 0:  # a dearer competitor should not lower our sales
+        model.warnings.append(Msg("warn_comp_sign"))
     return model
 
 
@@ -231,6 +233,9 @@ class ScenarioResult:
     ped_current: float
     break_evens: list[float]
     warnings: list[str]
+    # False when profit still rises at the top of the price grid: there is no optimum inside the
+    # searched range (e.g. inelastic log-log demand), only the grid edge
+    interior: bool = True
 
 
 def shocked_costs(p: ScenarioParams) -> tuple[float, float]:
@@ -304,6 +309,11 @@ def _comp_at(p: ScenarioParams, s: _Setup, price) -> np.ndarray | float | None:
     return s.comp_real * (1 + np.where(move < 0, p.comp_match_cut, p.comp_match_rise) * move)
 
 
+def competitor_price_at(model: DemandModel, p: ScenarioParams, price: float) -> float | None:
+    """The competitor's real price, after any reaction, when we charge nominal `price`."""
+    return _scalar(_comp_at(p, _setup(model.has_comp, p), price))
+
+
 def run_scenario(model: DemandModel, p: ScenarioParams) -> ScenarioResult:
     mult = PERIOD_MULT[p.period]
     warnings: list[str] = []
@@ -359,6 +369,7 @@ def run_scenario(model: DemandModel, p: ScenarioParams) -> ScenarioResult:
         ped_current=ped_current,
         break_evens=break_evens,
         warnings=warnings,
+        interior=i < len(grid) - 1,
     )
 
 
@@ -553,7 +564,10 @@ def _test_price(p: ScenarioParams, step: float, rails: Guardrails) -> tuple[floa
     target = float(np.clip(wanted, low, high))
     clipped = abs(target - wanted) > 1e-9
     if rails.ending != "none":
-        candidates = [c for c in _with_ending(target, rails.ending) if low <= c <= high and c > 0]
+        # Never round back to (or barely past) the current price: the test would compare a price with itself
+        move = target - current
+        candidates = [c for c in _with_ending(target, rails.ending)
+                      if low <= c <= high and c > 0 and (c - current) * move > 0 and abs(c - current) >= abs(move) / 2]
         if candidates:
             return min(candidates, key=lambda c: abs(c - target)), clipped
     return round(target, 2), clipped
@@ -588,7 +602,9 @@ def test_plan(model: DemandModel, p: ScenarioParams, unconstrained: float, noise
     warnings = []
     if clipped:
         warnings.append(Msg("warn_test_step_clipped", step=step * 100, price=test_price))
-    if needed > TEST_MAX_WEEKS:
+    if abs(test_price - p.current_price) < 0.005:
+        warnings.append(Msg("warn_test_no_change", price=test_price))
+    elif needed > TEST_MAX_WEEKS:
         warnings.append(Msg("warn_test_underpowered", weeks=TEST_MAX_WEEKS))
 
     arms = np.where(np.arange(weeks) % 2 == 0, "test", "current")
@@ -634,7 +650,9 @@ def _arc_elasticity(q_test, q_cur, p_test, p_cur) -> float:
 def evaluate_test(plan: TestPlan, actual) -> TestVerdict | None:
     """Compare entered weekly units with the plan. Needs at least two weeks at each price.
     The price response is judged on the difference between arms, which a common season or
-    trend shift cancels out of."""
+    trend shift cancels out of. None as well when both arms have the same price (nothing to compare)."""
+    if abs(plan.test_price - plan.current_price) < 0.005:
+        return None
     a = pd.to_numeric(pd.Series(list(actual), dtype=object), errors="coerce").to_numpy(dtype=float)
     arms = plan.schedule["arm"].to_numpy()
     test, cur = a[(arms == "test") & ~np.isnan(a)], a[(arms == "current") & ~np.isnan(a)]

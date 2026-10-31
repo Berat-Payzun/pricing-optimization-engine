@@ -249,3 +249,29 @@ def test_flagged_row_in_monthly_file_excludes_the_month():
 def test_no_flag_column_leaves_aggregate_unchanged():
     agg, _ = aggregate(daily_frame())
     assert "Excluded" not in agg and "Flagged_Share" not in agg
+
+
+def test_product_without_competitor_prices_drops_the_column():
+    rows = ["Date,Product,Price_Charged,Quantity_Sold,Competitor_Price"]
+    for i, d in enumerate(pd.date_range("2024-01-01", periods=12, freq="MS")):
+        rows += [f"{d.date()},A,{10 + i % 4},{100 - i % 4 * 5},{11 + i % 3}", f"{d.date()},B,{20 + i % 4},{80 - i % 4 * 4},"]
+    df, _ = load_csv(csv("\n".join(rows)), default_cogs=5)
+    agg_b, warnings = aggregate(df[df["Product"] == "B"].drop(columns="Product"))
+    assert "Competitor_Price" not in agg_b and "warn_comp_empty" in [w.key for w in warnings]
+    agg_a, _ = aggregate(df[df["Product"] == "A"].drop(columns="Product"))
+    assert agg_a["Competitor_Price"].notna().all()
+
+
+def test_negative_cost_cost_above_price_and_nonpositive_competitor():
+    data = """
+Date,Price_Charged,Quantity_Sold,Cost_Per_Unit,Competitor_Price
+2024-01-01,10,5,-4,12
+2024-01-02,10,5,14,0
+2024-01-03,10,5,4,-3
+2024-01-04,10,5,4,11
+"""
+    df, warnings = load_csv(csv(data), default_cogs=6)
+    keys = {w.key: w.params for w in warnings}
+    assert df["Cost_Per_Unit"].tolist() == [6.0, 14.0, 4.0, 4.0] and keys["warn_cost_negative"]["n"] == 1
+    assert keys["warn_cost_above_price"]["n"] == 1
+    assert keys["warn_comp_nonpositive"]["n"] == 2 and df["Competitor_Price"].tolist() == [12.0, 12.0, 12.0, 11.0]
