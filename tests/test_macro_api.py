@@ -18,8 +18,9 @@ FRED_JSON = fred_json([("2024-01-01", "100.0"), ("2024-02-01", "."), ("2024-03-0
 
 @pytest.fixture(autouse=True)
 def no_real_fred_key(monkeypatch):
-    """Tests never use a developer's real key or reach the real API."""
+    """Tests never use a developer's real key or reach the real API, and never wait between retries."""
     monkeypatch.delenv("FRED_API_KEY", raising=False)
+    monkeypatch.setattr(macro_api, "FRED_RETRY_WAITS", (0.0, 0.0))
 
 
 def test_parse_fred_json_skips_missing_dots():
@@ -106,6 +107,49 @@ def test_fred_errors_never_contain_the_key(monkeypatch, failure):
     # No original exception (with the URL) can surface in a traceback
     assert err.value.__cause__ is None and (err.value.__context__ is None or err.value.__suppress_context__)
     assert not get_inflation("US").ok
+
+
+def fred_sequence(monkeypatch, statuses):
+    """requests.get answers with these HTTP statuses in turn (FRED_JSON on 200)."""
+    import requests
+
+    calls, answers = [], iter(statuses)
+
+    def fake_get(url, params=None, **kw):
+        calls.append(params["series_id"])
+        status = next(answers)
+        return FakeResp(status_code=status, payload=FRED_JSON if status == 200 else {})
+
+    monkeypatch.setenv("FRED_API_KEY", TEST_KEY)
+    monkeypatch.setattr(requests, "get", fake_get)
+    return calls
+
+
+def test_fred_retries_server_errors(monkeypatch):
+    calls = fred_sequence(monkeypatch, [502, 503, 200])
+    assert len(macro_api.fetch_fred_series("CPIAUCSL")) == 4 and len(calls) == 3
+
+
+def test_fred_gives_up_after_three_attempts(monkeypatch):
+    calls = fred_sequence(monkeypatch, [502, 502, 502, 200])
+    with pytest.raises(ValueError, match="HTTP 502"):
+        macro_api.fetch_fred_series("CPIAUCSL")
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize("status", [400, 404])
+def test_fred_does_not_retry_client_errors(monkeypatch, status):
+    calls = fred_sequence(monkeypatch, [status, 200])
+    with pytest.raises(ValueError, match=f"HTTP {status}"):
+        macro_api.fetch_fred_series("CPIAUCSL")
+    assert len(calls) == 1
+
+
+def test_us_cpi_falls_back_to_unadjusted_series(monkeypatch):
+    calls = fred_sequence(monkeypatch, [502, 502, 502, 200])
+    v = get_inflation("US")
+    assert v.ok and v.source == "FRED API CPIAUCNS"
+    assert calls == ["CPIAUCSL"] * 3 + ["CPIAUCNS"]
 
 
 def test_inflation_falls_back_when_network_down(monkeypatch):

@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import io
 import os
+import time
 from dataclasses import asdict
 from datetime import date
 from functools import partial
@@ -59,6 +60,19 @@ def cached_inflation(country: str):
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
 def cached_fx(country: str):
     return get_fx(country)
+
+
+OFFLINE_RETRY_S = 600
+
+
+def live(cached, country: str):
+    """A cached macro value, except that an offline fallback is fetched again after 10 minutes
+    instead of being kept for the cache's 6 hours."""
+    value = cached(country)
+    if not value.ok and time.time() - getattr(value, "fetched_at", 0) > OFFLINE_RETRY_S:
+        cached.clear(country)
+        value = cached(country)
+    return value
 
 
 @st.cache_data(show_spinner=False)
@@ -235,8 +249,8 @@ with scenario_box:
             st.warning(t("scen_warn_product", product=scenario_status["product_missing"]))
 
 with st.spinner(t("spinner_macro")):
-    infl, fx = cached_inflation(country), cached_fx(country)
-    us_infl = infl if country == "US" else cached_inflation("US")
+    infl, fx = live(cached_inflation, country), live(cached_fx, country)
+    us_infl = infl if country == "US" else live(cached_inflation, "US")
 
 agg, deflate_warnings = deflate(agg, infl.series if use_real else None)
 if not use_real:
