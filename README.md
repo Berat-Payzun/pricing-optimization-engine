@@ -8,7 +8,7 @@ Upload a CSV or Excel file of past prices and quantities. The engine fits a dema
 
 ## Features
 
-- **Demand estimation:** linear OLS or log-log (constant elasticity) regression.
+- **Demand estimation:** linear OLS or log-log (constant elasticity) regression. **Auto** (the default) picks the model with the lower backtest error, or the higher R² when there is too little data for a backtest, and says which one it chose.
 - **Backtest:** each of the last 6 months is forecast by a model fitted only on the months before it, at the price actually charged. The headline card shows this out-of-sample error (WAPE) against a naive "same as last month" forecast, for both models, instead of the in-sample R², which flatters the fit. R² is still listed in the model details, next to an actual-vs-forecast chart.
 - **Seasonality (optional):** month-of-year effects in the demand fit, so a seasonal peak isn't mistaken for low price sensitivity. On by default with 24+ months of data.
 - **Growth trend (optional):** a linear time trend in the demand fit, so steady growth or decline isn't mistaken for a price effect. With real prices under high inflation the real price falls month after month, so without it growth makes demand look more price-sensitive than it is. Demand is then priced at the latest month's level.
@@ -16,7 +16,9 @@ Upload a CSV or Excel file of past prices and quantities. The engine fits a dema
 - **Fees & taxes:** one **variable selling costs %** for everything charged as a share of the price, such as marketplace commission, card/payment fee or sales and distributor commission (charged on the customer-facing price, including VAT), a "prices include VAT" toggle with the country's standard rate prefilled (TR 20%, DE/Eurozone 19%, FR 20%, IT 22%, ES 21%, UK 20%, US/Brazil/Global 0%), and an extra per-unit cost for shipping or packaging. A **unit economics & tax breakdown** shows where each unit's price goes.
 - **Guardrails:** max change from the current price (±15% by default), minimum margin per unit, price floor and ceiling, and rounding to x.99, x.90 or whole numbers. When a rule binds, the unconstrained optimum and the limiting rule are shown next to the recommendation.
 - **Price test plan:** a controlled test that checks the demand estimate. It alternates the current and a test price week by week, so seasons and trends affect both alike. You choose the test price step (10% by default); the app shows the weeks needed for that step, given your sales' normal week-to-week variation, and a chart of how a bigger step shortens the test. The plan lists expected weekly units with 90% bands. Type in actual weekly units and the app says whether customers react as the model expects, or are more or less price-sensitive. The plan is in the Excel export with an empty Actual column.
-- **Uncertainty range:** a bootstrap (200 refits on resampled months) gives a 90% range for the optimal price, shown under the metric and as a band on the chart.
+- **Uncertainty range:** a bootstrap (200 refits on resampled months) gives a 90% range for the optimal price, shown under the metric and as a band on the chart when no guardrail binds.
+- **Elasticity confidence:** the same bootstrap gives a 90% confidence interval for the price elasticity at the recommended price, with a high / medium / low confidence badge (from the interval's width relative to its centre; low whenever the interval includes zero).
+- **Sensitivity (tornado chart):** "What moves the optimal price?" re-runs today's optimization with each input moved ±10% (unit cost, price sensitivity, variable selling costs, VAT, exchange rate, competitor price) and ranks them by how far the optimal price moves. Also in the Excel export.
 - **Competitor-aware (optional):** if the CSV has competitor prices, the model estimates the cross-price effect (XED) and enables a competitor-shock slider.
 - **Competitor reaction:** two sliders set how much of your price cuts and of your rises the competitor copies (both 0% by default, the optimistic case). The reaction feeds the recommendation, the scenario and the 90% range, and the headline shows what the price would be without a reaction. The weekly price test keeps the competitor fixed.
 - **Inflation-adjusted history:** historical prices are deflated with the country's CPI before fitting. Without this, in high-inflation economies like Turkey, nominal price rises would be mistaken for real ones.
@@ -31,7 +33,7 @@ Upload a CSV or Excel file of past prices and quantities. The engine fits a dema
   - a "customer prices rise with inflation" toggle decides whether inflation also lifts willingness to pay and the competitor's price
 - **Operational limits:** capacity/inventory ceiling and fixed costs; results shown per month, quarter or year.
 - **Unit cost override:** test "what if my unit cost were X?" without editing the file.
-- **Several products per file:** add a `Product` column and pick the product in the sidebar.
+- **Several products per file:** add a `Product` column and pick the product in the sidebar. An **All products** table recommends today's price for every product at once (model, change, elasticity, contribution gain, backtest error, or the reason a product can't be priced), with the shared fees, VAT and guardrails. Gains are contribution before fixed costs, which aren't split by product. Also in the Excel export.
 - **Duplicate rows:** exact duplicate rows (common when overlapping exports are combined) are removed with a warning. Turn the option off for transaction logs where identical sales are real.
 - **Export:** download an Excel workbook (summary, today's profit curve, scenario curve, monthly data, models) or a PDF summary with the main chart. Text in the workbook is always stored as text, so a product name like `=HYPERLINK(...)` from an uploaded file can't become a live formula.
 - **Saved scenarios:** "Save scenario" in the sidebar downloads every setting, plus any actual units typed into a running price test, as a small JSON file. "Load scenario" restores it later. The file never contains your sales data, only a fingerprint of it, so the app warns when you load a scenario against a different sales file. Files stay on your computer: Streamlit Cloud's server disk is wiped on restart and shared by all visitors. Loading only parses JSON and checks every value (unknown settings skipped, out-of-range numbers clipped).
@@ -62,7 +64,16 @@ Without a key the app still runs: FRED series fall back to built-in values, and 
 
 Streamlit Community Cloud pulls every push to `main` and reloads `app.py`, but modules it imports (`optimizer.py`, `macro_api.py`, …) can stay loaded in their old version. A change that touches both can then fail with errors like `TypeError: ScenarioParams.__init__() got an unexpected keyword argument`. After merging such a change, open **Manage app → ⋮ → Reboot app**.
 
-The app opens with `sample_data.csv` loaded. You can regenerate it with `python scripts/generate_sample_data.py`; its true demand is `Q/day = 120 − 2·P + 1·P_comp`. Run the tests with `pytest`.
+The app opens with `sample_data.csv` loaded: four products with known demand curves, each showing a different feature. Regenerate it with `python scripts/generate_sample_data.py`.
+
+| Product | History | True demand | Try |
+|---|---|---|---|
+| Classic Mug | 24 months | `Q/day = 120 − 2·P + 1·P_comp`, weekend promos flagged | The default view; Auto picks linear |
+| Travel Mug | 24 months | Constant elasticity −1.8, demand growing 2% a month, no competitor prices | Turn on the growth trend: Auto switches to log-log and the backtest error drops |
+| Gift Set | 36 months | `Q/day = (60 − 0.8·P + 0.4·P_comp) × season` (Nov/Dec peak), December stockouts flagged | Turn on seasonality: the backtest error drops |
+| New Tumbler | 2 months | Just launched | Too few months to price: the **All products** table shows why |
+
+Run the tests with `pytest`.
 
 ## File format (CSV or Excel)
 
@@ -140,7 +151,7 @@ For linear demand without a capacity cap, the result matches the closed-form opt
 ## Project structure
 
 ```
-├── .github/workflows/tests.yml   # runs pytest on every push and pull request
+├── .github/workflows/tests.yml   # runs pytest with coverage on every push and pull request
 ├── assets/fonts/          # DejaVu Sans for the PDF export (covers Turkish letters and ₺)
 ├── sample_data.csv
 ├── scripts/generate_sample_data.py
@@ -149,9 +160,10 @@ For linear demand without a capacity cap, the result matches the closed-form opt
 │   ├── config.py           # country → series mapping, defaults
 │   ├── data_ingestion.py   # CSV/Excel reading, header aliases, monthly aggregation, CPI deflation
 │   ├── macro_api.py        # FRED / ONS / OECD / Yahoo fetchers with fallback
-│   ├── optimizer.py        # demand fit (incl. seasonality), elasticities, shock pipeline, solver, bootstrap
+│   ├── optimizer.py        # demand fit (seasonality, trend), elasticities, shock pipeline, solver, bootstrap, sensitivity
+│   ├── portfolio.py        # today's recommendation for every product in a file
 │   ├── report.py           # Excel and PDF export
 │   ├── scenarios.py        # save / load scenarios as JSON
 │   └── translations.py     # UI strings in English, Turkish and German
-└── tests/
+└── tests/                  # unit tests per module, plus test_app.py: the whole app run headless (network stubbed)
 ```

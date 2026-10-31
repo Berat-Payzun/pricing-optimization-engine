@@ -3,7 +3,7 @@ import io
 import numpy as np
 import pandas as pd
 
-from report import Chart, Series, VLine, build_excel, build_pdf
+from report import Chart, Series, VLine, build_excel, build_pdf, label_rows
 
 
 def test_excel_has_one_sheet_per_frame():
@@ -40,3 +40,21 @@ def test_pdf_with_long_summary_moves_chart_to_next_page():
     chart = Chart("Profit", x, [Series("Net profit", -(x - 50) ** 2 + 900, "#2a78d6")])
     pdf = build_pdf("Title", "Subtitle", [(f"Row {i}", "value") for i in range(40)], chart)
     assert pdf.count(b"/Type /Page") - pdf.count(b"/Type /Pages") == 2
+
+
+def test_label_rows_stacks_only_overlapping_labels():
+    # recommended, unconstrained and current labels starting close together, plus one far to the right
+    spans = [(16.99, 19.5), (16.5, 19.0), (17.2, 19.4), (25.0, 27.0)]
+    rows = label_rows(spans, gap=0.1)
+    assert sorted(rows[:3]) == [0, 1, 2]  # the three close labels each get their own row
+    assert rows[3] == 0  # the far one fits on the top row
+    assert label_rows([]) == []
+
+
+def test_pdf_with_overlapping_markers_builds():
+    x = np.linspace(10, 30, 50)
+    chart = Chart("Profit", x, [Series("Profit", -(x - 17) ** 2 + 100, "#2a78d6")],
+                  vlines=[VLine(16.99, "Recommended $16.99", "#2a78d6"), VLine(17.10, "Unconstrained $17.10", "#898781"),
+                          VLine(16.89, "Current $16.89", "#898781", dashed=True), VLine(29.9, "Edge $29.90", "#898781")])
+    pdf = build_pdf("T", "", [("Price", "$16.99")], chart)
+    assert pdf[:4] == b"%PDF"

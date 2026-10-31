@@ -659,3 +659,72 @@ def test_trend_flows_into_backtest_and_bootstrap():
     p = params(m, current_price=45.0, base_comp_price=None)
     low, high = optimal_price_range(agg, "linear", p, n=60, trend=True)
     assert low <= run_scenario(m, p).optimal["price"] <= high
+
+
+# ---------- elasticity confidence, model choice, sensitivity ----------
+
+def test_bootstrap_ped_interval_brackets_the_true_elasticity():
+    from optimizer import bootstrap
+
+    agg = synthetic_agg("loglog", noise=0.03)
+    m = fit_demand(agg, "loglog")
+    b = bootstrap(agg, "loglog", params(m), n=100, seed=2)
+    assert b.ped[0] < -2.5 < b.ped[1] and b.ped_confidence == "high"
+    assert b.price == optimizer_range(agg, m)  # same resamples as the price-only range
+
+
+def optimizer_range(agg, m):
+    from optimizer import optimal_price_range
+
+    return optimal_price_range(agg, "loglog", params(m), n=100, seed=2)
+
+
+def test_ped_confidence_levels():
+    from optimizer import Bootstrap
+
+    assert Bootstrap((1, 2), (-2.2, -1.8), 10).ped_confidence == "high"
+    assert Bootstrap((1, 2), (-2.8, -1.2), 10).ped_confidence == "medium"
+    assert Bootstrap((1, 2), (-4.0, -0.5), 10).ped_confidence == "low"
+    assert Bootstrap((1, 2), (-1.0, 0.2), 10).ped_confidence == "low"  # sign not even certain
+    assert Bootstrap((1, 2), None, 10).ped_confidence == "low"
+
+
+def test_best_model_follows_the_backtest_then_r2():
+    from optimizer import Backtest, backtest, best_model
+
+    for kind in ("linear", "loglog"):
+        agg = synthetic_agg(kind, noise=0.02)
+        models = {k: fit_demand(agg, k) for k in ("linear", "loglog")}
+        assert best_model(models, {k: backtest(agg, k) for k in models}) == kind
+    agg = synthetic_agg("loglog", noise=0.02)
+    models = {"linear": fit_demand(agg, "linear"), "loglog": ValueError("no fit")}
+    assert best_model(models, {"linear": None, "loglog": None}) == "linear"
+    assert best_model({"linear": ValueError(), "loglog": ValueError()}, {}) is None
+
+
+def test_sensitivity_moves_the_optimum_the_right_way():
+    from optimizer import sensitivity
+
+    m = fit_demand(synthetic_agg(), "linear")
+    s = sensitivity(m, params(m, fee_rate=0.1)).set_index("factor")
+    assert "vat" not in s.index and "fx" not in s.index  # no VAT, no imported share: can't move anything
+    assert s.loc["cogs", "price_high"] > s.attrs["base_price"] > s.loc["cogs", "price_low"]
+    assert s.loc["elasticity", "price_high"] < s.attrs["base_price"]  # more price-sensitive → lower price
+    assert s.loc["competitor", "price_high"] > s.attrs["base_price"]  # dearer competitor → room to raise
+    assert s.loc["inflation", "price_high"] > s.attrs["base_price"] > s.loc["inflation", "price_low"]  # costs up → price up
+    spread = (s["price_high"] - s["price_low"]).abs()
+    assert spread.is_monotonic_decreasing
+
+
+def test_sensitivity_inflation_is_percentage_points_and_skipped_when_inert():
+    from dataclasses import replace
+
+    from optimizer import sensitivity
+
+    m = fit_demand(synthetic_agg(), "linear")
+    p = params(m, inflation=0.0)
+    s = sensitivity(m, p, factors=("inflation",)).set_index("factor")
+    expected = run_scenario(m, replace(p, inflation=0.10)).optimal["price"]  # +10 points from 0%, not 0% × 1.1
+    assert s.loc["inflation", "price_high"] == pytest.approx(float(expected))
+    # fully imported COGS, no extra unit cost, no pass-through: inflation only hits fixed costs
+    assert sensitivity(m, params(m, import_share=1.0), factors=("inflation",)).empty

@@ -66,6 +66,22 @@ class Chart:
     band: tuple[float, float, str] | None = None  # (x0, x1, label) shaded range
 
 
+def label_rows(spans: list[tuple[float, float]], gap: float = 0.0) -> list[int]:
+    """Row (0 = top) for each label so labels sharing a row don't overlap. `spans` are the labels'
+    (start, end) extents along x, in any unit; `gap` is the minimum space between two labels in a row.
+    Greedy left to right: each label takes the first row whose last label ends before it starts."""
+    rows, ends = [0] * len(spans), []
+    for i in sorted(range(len(spans)), key=lambda i: spans[i][0]):
+        start, end = spans[i]
+        row = next((r for r, e in enumerate(ends) if e + gap <= start), len(ends))
+        if row == len(ends):
+            ends.append(end)
+        else:
+            ends[row] = end
+        rows[i] = row
+    return rows
+
+
 def _rgb(hex_color: str) -> tuple[int, int, int]:
     h = hex_color.lstrip("#")
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
@@ -134,18 +150,24 @@ def _draw_chart(pdf: _PDF, chart: Chart, x0: float, y0: float, w: float, h: floa
         pdf.set_line_width(s.width)
         pdf.polyline([(px(x), py(y)) for x, y in zip(xs[::step], np.asarray(s.y)[::step])])
 
-    for v in chart.vlines:
-        if not xmin <= v.x <= xmax:
-            continue
+    vlines = [v for v in chart.vlines if xmin <= v.x <= xmax]
+    # label to the right of its line, or to the left near the right edge; close lines stack their labels
+    spans = []
+    for v in vlines:
+        lw = pdf.get_string_width(v.label) + 1
+        spans.append((px(v.x) + 1, px(v.x) + 1 + lw) if px(v.x) + 1 + lw <= right else (px(v.x) - 1 - lw, px(v.x) - 1))
+    for v in vlines:
         pdf.set_draw_color(*_rgb(v.color))
         pdf.set_line_width(0.3)
         if v.dashed:
             pdf.set_dash_pattern(dash=1.2, gap=1.0)
         pdf.line(px(v.x), top, px(v.x), bottom)
         pdf.set_dash_pattern()
+    for v, (sx, ex), row in zip(vlines, spans, label_rows(spans, gap=1.5)):  # labels after all lines
         pdf.set_text_color(*_rgb(v.color))
-        pdf.set_xy(px(v.x) + 1, top)
-        pdf.cell(40, 4, v.label)
+        pdf.set_fill_color(255, 255, 255)
+        pdf.set_xy(sx, top + row * 4)
+        pdf.cell(ex - sx, 4, v.label, fill=True)
 
     # Axis titles and legend
     pdf.set_text_color(110, 110, 110)
