@@ -511,20 +511,21 @@ STRINGS: dict[str, dict[str, str]] = {
     "sens_profit": {"en": "profit", "tr": "kâr", "de": "Gewinn"},
     "sens_caption": {
         "en": "Each bar re-runs today's optimization with one input moved and all others unchanged (unconstrained "
-              "optimum, before guardrails). Exchange rate and competitor price move as a ±10% shift. The longest bars "
-              "are the inputs worth pinning down first.",
+              "optimum, before guardrails). Exchange rate and competitor price move as a ±10% shift, inflation by ±10 "
+              "percentage points. The longest bars are the inputs worth pinning down first.",
         "tr": "Her çubuk, bir girdi değiştirilip diğerleri sabit tutularak bugünkü optimizasyonu yeniden çalıştırır "
-              "(kısıtsız optimum, fiyat kurallarından önce). Döviz kuru ve rakip fiyatı ±%10 kayma olarak değişir. En "
-              "uzun çubuklar, önce netleştirilmesi gereken girdilerdir.",
+              "(kısıtsız optimum, fiyat kurallarından önce). Döviz kuru ve rakip fiyatı ±%10 kayma olarak, enflasyon "
+              "±10 puan değişir. En uzun çubuklar, önce netleştirilmesi gereken girdilerdir.",
         "de": "Jeder Balken rechnet die heutige Optimierung mit einer geänderten Eingabe neu, alle anderen bleiben "
-              "gleich (Optimum ohne Preisregeln). Wechselkurs und Konkurrenzpreis ändern sich um ±10 %. Die längsten "
-              "Balken zeigen die Eingaben, die zuerst geklärt werden sollten.",
+              "gleich (Optimum ohne Preisregeln). Wechselkurs und Konkurrenzpreis ändern sich um ±10 %, die Inflation "
+              "um ±10 Prozentpunkte. Die längsten Balken zeigen die Eingaben, die zuerst geklärt werden sollten.",
     },
     "sens_factor_cogs": {"en": "Unit cost", "tr": "Birim maliyet", "de": "Stückkosten"},
     "sens_factor_elasticity": {"en": "Price sensitivity", "tr": "Fiyat duyarlılığı", "de": "Preissensibilität"},
     "sens_factor_fees": {"en": "Variable selling costs", "tr": "Değişken satış giderleri", "de": "Variable Vertriebskosten"},
     "sens_factor_competitor": {"en": "Competitor price", "tr": "Rakip fiyatı", "de": "Konkurrenzpreis"},
     "sens_factor_fx": {"en": "Exchange rate", "tr": "Döviz kuru", "de": "Wechselkurs"},
+    "sens_factor_inflation": {"en": "Inflation", "tr": "Enflasyon", "de": "Inflation"},
     "sens_factor_vat": {"en": "VAT rate", "tr": "KDV oranı", "de": "MwSt.-Satz"},
     "sens_col_factor": {"en": "Input", "tr": "Girdi", "de": "Eingabe"},
     "sens_col_price_low": {"en": "Optimal price at −10%", "tr": "−%10'da optimum fiyat", "de": "Optimaler Preis bei −10 %"},

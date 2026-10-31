@@ -711,5 +711,20 @@ def test_sensitivity_moves_the_optimum_the_right_way():
     assert s.loc["cogs", "price_high"] > s.attrs["base_price"] > s.loc["cogs", "price_low"]
     assert s.loc["elasticity", "price_high"] < s.attrs["base_price"]  # more price-sensitive → lower price
     assert s.loc["competitor", "price_high"] > s.attrs["base_price"]  # dearer competitor → room to raise
+    assert s.loc["inflation", "price_high"] > s.attrs["base_price"] > s.loc["inflation", "price_low"]  # costs up → price up
     spread = (s["price_high"] - s["price_low"]).abs()
     assert spread.is_monotonic_decreasing
+
+
+def test_sensitivity_inflation_is_percentage_points_and_skipped_when_inert():
+    from dataclasses import replace
+
+    from optimizer import sensitivity
+
+    m = fit_demand(synthetic_agg(), "linear")
+    p = params(m, inflation=0.0)
+    s = sensitivity(m, p, factors=("inflation",)).set_index("factor")
+    expected = run_scenario(m, replace(p, inflation=0.10)).optimal["price"]  # +10 points from 0%, not 0% × 1.1
+    assert s.loc["inflation", "price_high"] == pytest.approx(float(expected))
+    # fully imported COGS, no extra unit cost, no pass-through: inflation only hits fixed costs
+    assert sensitivity(m, params(m, import_share=1.0), factors=("inflation",)).empty

@@ -786,20 +786,25 @@ def best_model(models: dict, backtests: dict) -> str | None:
     return max(fitted, key=lambda k: models[k].r2)
 
 
-SENSITIVITY_FACTORS = ("cogs", "elasticity", "fees", "competitor", "fx", "vat")
+SENSITIVITY_FACTORS = ("cogs", "elasticity", "fees", "competitor", "fx", "inflation", "vat")
 
 
 def sensitivity(model: DemandModel, p: ScenarioParams, delta: float = 0.10,
                 factors=SENSITIVITY_FACTORS) -> pd.DataFrame:
     """Tornado data: the optimal price and profit with one input moved by −delta and +delta
-    (relative; FX and competitor as a shift of that size), all others as in `p`. Inputs that
-    can't move the result (no fees, no VAT, no imported share, no competitor data) are left out.
+    (relative; FX, competitor and inflation as a shift of that size, i.e. percentage points for
+    inflation), all others as in `p`. Inputs that can't move the result (no fees, no VAT, no
+    imported share, no competitor data, inflation that only touches fixed costs) are left out.
     Sorted by how far the optimal price moves."""
     base = run_scenario(model, p).optimal
+    # local inflation moves P* through the local COGS share, extra unit costs or price pass-through;
+    # on fixed costs alone it changes profit but not the optimal price
+    inflation_inert = p.import_share >= 1 and p.extra_unit_cost == 0 and not p.price_passthrough
     rows = []
     for factor in factors:
         if ((factor == "fees" and p.fee_rate == 0) or (factor == "vat" and p.vat == 0)
-                or (factor == "fx" and p.import_share == 0) or (factor == "competitor" and not model.has_comp)):
+                or (factor == "fx" and p.import_share == 0) or (factor == "competitor" and not model.has_comp)
+                or (factor == "inflation" and inflation_inert)):
             continue
         out = {"factor": factor}
         for label, sign in (("low", -1), ("high", 1)):
@@ -816,6 +821,8 @@ def sensitivity(model: DemandModel, p: ScenarioParams, delta: float = 0.10,
                 q = replace(p, comp_shift=p.comp_shift + sign * delta)
             elif factor == "fx":
                 q = replace(p, fx_shift=p.fx_shift + sign * delta)
+            elif factor == "inflation":  # ± delta percentage points on local inflation
+                q = replace(p, inflation=p.inflation + sign * delta)
             opt = run_scenario(m, q).optimal
             out[f"price_{label}"], out[f"profit_{label}"] = float(opt["price"]), float(opt["profit"])
         rows.append(out)
