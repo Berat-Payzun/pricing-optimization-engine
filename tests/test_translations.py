@@ -86,3 +86,11 @@ def test_translate_falls_back_to_english(lang):
 
 def test_translate_unknown_key_returns_key():
     assert translate("no_such_key", "tr") == "no_such_key"
+
+
+def test_keys_built_at_runtime_exist():
+    from optimizer import SENSITIVITY_FACTORS
+
+    keys = {f"sens_factor_{f}" for f in SENSITIVITY_FACTORS} | {"sens_low", "sens_high", "model_auto"}
+    keys |= {f"badge_conf_{c}" for c in ("high", "medium", "low")}
+    assert keys - set(STRINGS) == set()

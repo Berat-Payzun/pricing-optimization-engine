@@ -466,6 +466,101 @@ STRINGS: dict[str, dict[str, str]] = {
               "schwach festlegen.",
     },
     "chart_range": {"en": "90% range of the optimum", "tr": "Optimumun %90 aralığı", "de": "90%-Bereich des Optimums"},
+    # ---------- model choice, elasticity confidence, sensitivity, portfolio ----------
+    "model_auto": {"en": "Auto", "tr": "Otomatik", "de": "Automatisch"},
+    "model_help": {
+        "en": "Auto picks the model with the lower out-of-sample forecast error (rolling backtest), or the higher "
+              "R² when there is too little data for a backtest.",
+        "tr": "Otomatik, örneklem dışı tahmin hatası (kayan geriye dönük test) daha düşük olan modeli seçer; geriye "
+              "dönük test için veri yetersizse R² değeri daha yüksek olanı.",
+        "de": "Automatisch wählt das Modell mit dem kleineren Prognosefehler außerhalb der Stichprobe (rollierender "
+              "Backtest) bzw. dem höheren R², wenn die Daten für einen Backtest nicht reichen.",
+    },
+    "model_auto_caption": {
+        "en": "Auto chose {model} (backtest error {wape}).",
+        "tr": "Otomatik seçim: {model} (geriye dönük test hatası {wape}).",
+        "de": "Automatisch gewählt: {model} (Backtest-Fehler {wape}).",
+    },
+    "metric_ped_ci": {"en": "90% CI: {low} to {high}", "tr": "%90 GA: {low} ile {high} arası", "de": "90%-KI: {low} bis {high}"},
+    "metric_ped_ci_help": {
+        "en": "Bootstrap: the demand model was refitted on {n} resampled versions of your history, and the price "
+              "elasticity at the recommended price fell in this range 90% of the time.",
+        "tr": "Bootstrap: talep modeli geçmiş verinizin yeniden örneklenmiş {n} versiyonuyla tekrar kuruldu; önerilen "
+              "fiyattaki fiyat esnekliği zamanın %90'ında bu aralıkta kaldı.",
+        "de": "Bootstrap: Das Nachfragemodell wurde auf {n} neu gezogenen Versionen Ihrer Historie geschätzt; die "
+              "Preiselastizität beim empfohlenen Preis lag in 90 % der Fälle in diesem Bereich.",
+    },
+    "badge_conf_high": {"en": "High confidence", "tr": "Yüksek güven", "de": "Hohe Sicherheit"},
+    "badge_conf_medium": {"en": "Medium confidence", "tr": "Orta güven", "de": "Mittlere Sicherheit"},
+    "badge_conf_low": {"en": "Low confidence", "tr": "Düşük güven", "de": "Geringe Sicherheit"},
+    "sum_ped_ci": {"en": "Price elasticity, 90% CI", "tr": "Fiyat esnekliği, %90 GA", "de": "Preiselastizität, 90%-KI"},
+    "sens_expander": {"en": "What moves the optimal price?", "tr": "Optimum fiyatı ne etkiliyor?",
+                      "de": "Was bewegt den optimalen Preis?"},
+    "sens_na": {
+        "en": "Not available: there is no optimum inside the tested price range.",
+        "tr": "Kullanılamıyor: denenen fiyat aralığında bir optimum yok.",
+        "de": "Nicht verfügbar: Im getesteten Preisbereich gibt es kein Optimum.",
+    },
+    "sens_title": {"en": "Change in optimal price ({price}) with each input ±10%",
+                   "tr": "Her girdi ±%10 değiştiğinde optimum fiyattaki ({price}) değişim",
+                   "de": "Änderung des optimalen Preises ({price}) bei ±10 % je Eingabe"},
+    "sens_axis": {"en": "Change in optimal price ({sym})", "tr": "Optimum fiyattaki değişim ({sym})",
+                  "de": "Änderung des optimalen Preises ({sym})"},
+    "sens_low": {"en": "Input −10%", "tr": "Girdi −%10", "de": "Eingabe −10 %"},
+    "sens_high": {"en": "Input +10%", "tr": "Girdi +%10", "de": "Eingabe +10 %"},
+    "sens_profit": {"en": "profit", "tr": "kâr", "de": "Gewinn"},
+    "sens_caption": {
+        "en": "Each bar re-runs today's optimization with one input moved and all others unchanged (unconstrained "
+              "optimum, before guardrails). Exchange rate and competitor price move as a ±10% shift, inflation by ±10 "
+              "percentage points. The longest bars are the inputs worth pinning down first.",
+        "tr": "Her çubuk, bir girdi değiştirilip diğerleri sabit tutularak bugünkü optimizasyonu yeniden çalıştırır "
+              "(kısıtsız optimum, fiyat kurallarından önce). Döviz kuru ve rakip fiyatı ±%10 kayma olarak, enflasyon "
+              "±10 puan değişir. En uzun çubuklar, önce netleştirilmesi gereken girdilerdir.",
+        "de": "Jeder Balken rechnet die heutige Optimierung mit einer geänderten Eingabe neu, alle anderen bleiben "
+              "gleich (Optimum ohne Preisregeln). Wechselkurs und Konkurrenzpreis ändern sich um ±10 %, die Inflation "
+              "um ±10 Prozentpunkte. Die längsten Balken zeigen die Eingaben, die zuerst geklärt werden sollten.",
+    },
+    "sens_factor_cogs": {"en": "Unit cost", "tr": "Birim maliyet", "de": "Stückkosten"},
+    "sens_factor_elasticity": {"en": "Price sensitivity", "tr": "Fiyat duyarlılığı", "de": "Preissensibilität"},
+    "sens_factor_fees": {"en": "Variable selling costs", "tr": "Değişken satış giderleri", "de": "Variable Vertriebskosten"},
+    "sens_factor_competitor": {"en": "Competitor price", "tr": "Rakip fiyatı", "de": "Konkurrenzpreis"},
+    "sens_factor_fx": {"en": "Exchange rate", "tr": "Döviz kuru", "de": "Wechselkurs"},
+    "sens_factor_inflation": {"en": "Inflation", "tr": "Enflasyon", "de": "Inflation"},
+    "sens_factor_vat": {"en": "VAT rate", "tr": "KDV oranı", "de": "MwSt.-Satz"},
+    "sens_col_factor": {"en": "Input", "tr": "Girdi", "de": "Eingabe"},
+    "sens_col_price_low": {"en": "Optimal price at −10%", "tr": "−%10'da optimum fiyat", "de": "Optimaler Preis bei −10 %"},
+    "sens_col_price_high": {"en": "Optimal price at +10%", "tr": "+%10'da optimum fiyat", "de": "Optimaler Preis bei +10 %"},
+    "sens_col_profit_low": {"en": "Profit at −10%", "tr": "−%10'da kâr", "de": "Gewinn bei −10 %"},
+    "sens_col_profit_high": {"en": "Profit at +10%", "tr": "+%10'da kâr", "de": "Gewinn bei +10 %"},
+    "sheet_sensitivity": {"en": "Sensitivity", "tr": "Duyarlılık", "de": "Sensitivität"},
+    "sheet_portfolio": {"en": "All products", "tr": "Tüm ürünler", "de": "Alle Produkte"},
+    "pf_spinner": {"en": "Pricing every product…", "tr": "Tüm ürünler fiyatlanıyor…", "de": "Alle Produkte werden bepreist…"},
+    "pf_expander": {"en": "All products ({n}): recommended prices", "tr": "Tüm ürünler ({n}): önerilen fiyatlar",
+                    "de": "Alle Produkte ({n}): empfohlene Preise"},
+    "pf_caption": {
+        "en": "Today's recommendation for every product, with the same fees, VAT, import share, competitor reaction, "
+              "max change, minimum margin and price ending. Price floor/ceiling and the cost override apply to the "
+              "selected product only. Gains are contribution ({per}): profit before fixed costs, which aren't "
+              "split by product.",
+        "tr": "Her ürün için bugünkü öneri; aynı kesintiler, KDV, ithal payı, rakip tepkisi, en fazla değişim, minimum "
+              "marj ve fiyat bitişiyle. Taban/tavan fiyat ve maliyet geçersiz kılma yalnızca seçili ürüne uygulanır. "
+              "Kazançlar katkı payıdır ({per}): ürünlere bölünmeyen sabit giderlerden önceki kâr.",
+        "de": "Die heutige Empfehlung für jedes Produkt, mit denselben Gebühren, MwSt., Importanteil, "
+              "Konkurrenzreaktion, max. Änderung, Mindestmarge und Preisendung. Unter-/Obergrenze und Kosten-"
+              "Überschreibung gelten nur für das gewählte Produkt. Zuwächse sind Deckungsbeiträge ({per}): Gewinn vor "
+              "Fixkosten, die nicht auf Produkte aufgeteilt werden.",
+    },
+    "pf_col_product": {"en": "Product", "tr": "Ürün", "de": "Produkt"},
+    "pf_col_model": {"en": "Model", "tr": "Model", "de": "Modell"},
+    "pf_col_current": {"en": "Current price", "tr": "Mevcut fiyat", "de": "Aktueller Preis"},
+    "pf_col_rec": {"en": "Recommended price", "tr": "Önerilen fiyat", "de": "Empfohlener Preis"},
+    "pf_col_change": {"en": "Change", "tr": "Değişim", "de": "Änderung"},
+    "pf_col_ped": {"en": "Price elasticity", "tr": "Fiyat esnekliği", "de": "Preiselastizität"},
+    "pf_col_uplift": {"en": "Contribution gain ({per})", "tr": "Katkı payı artışı ({per})", "de": "Mehr-Deckungsbeitrag ({per})"},
+    "pf_col_wape": {"en": "Backtest error", "tr": "Geriye dönük test hatası", "de": "Backtest-Fehler"},
+    "pf_col_status": {"en": "Status", "tr": "Durum", "de": "Status"},
+    "pf_status_ok": {"en": "OK", "tr": "Tamam", "de": "OK"},
+    "pf_status_no_optimum": {"en": "No optimum in range", "tr": "Aralıkta optimum yok", "de": "Kein Optimum im Bereich"},
     # ---------- export ----------
     "export_header": {"en": "Export", "tr": "Dışa aktar", "de": "Export"},
     "export_caption": {
