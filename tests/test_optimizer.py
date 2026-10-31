@@ -234,7 +234,7 @@ def analytic_optimum(m, cogs, k=1.0):
     return (a_eff / -m.b + cogs / k) / 2
 
 
-@pytest.mark.parametrize("fees", [dict(commission=0.2), dict(vat=0.2), dict(vat=0.2, commission=0.15, payment_fee=0.02)])
+@pytest.mark.parametrize("fees", [dict(fee_rate=0.2), dict(vat=0.2), dict(vat=0.2, fee_rate=0.17)])
 def test_fees_and_vat_match_analytic_optimum(fees):
     m = fit_demand(synthetic_agg(), "linear")
     p = params(m, **fees)
@@ -248,7 +248,7 @@ def test_fees_and_vat_match_analytic_optimum(fees):
 def test_vat_and_fees_come_off_profit():
     m = fit_demand(synthetic_agg(), "linear")
     plain = run_scenario(m, params(m)).baseline
-    taxed = run_scenario(m, params(m, vat=0.2, commission=0.1)).baseline
+    taxed = run_scenario(m, params(m, vat=0.2, fee_rate=0.1)).baseline
     assert taxed["revenue"] == pytest.approx(plain["revenue"] / 1.2)
     assert taxed["fees"] == pytest.approx(0.1 * 45.0 * plain["q_sold"])
     assert taxed["profit"] == pytest.approx(plain["profit"] - taxed["vat"] - taxed["fees"])
@@ -268,7 +268,7 @@ def test_bootstrap_range_brackets_optimum_with_fees():
 
     agg = synthetic_agg(noise=0.05)
     m = fit_demand(agg, "linear")
-    p = params(m, commission=0.2, vat=0.2)
+    p = params(m, fee_rate=0.2, vat=0.2)
     low, high = optimal_price_range(agg, "linear", p, seed=3)
     assert low < run_scenario(m, p).optimal["price"] < high
 

@@ -279,10 +279,7 @@ with st.sidebar:
                                 key=max_price_key, help=t("max_price_help"))
 
     st.subheader(t("fees_header"))
-    commission = st.number_input(t("commission_label"), 0.0, 90.0, 0.0, step=0.5, help=t("commission_help"),
-                                 key="commission")
-    payment_fee = st.number_input(t("payment_fee_label"), 0.0, 20.0, 0.0, step=0.1, help=t("payment_fee_help"),
-                                  key="payment_fee")
+    fee_pct = st.number_input(t("fee_label"), 0.0, 90.0, 0.0, step=0.5, help=t("fee_help"), key="variable_fees")
     prices_incl_vat = st.toggle(t("vat_toggle"), value=False, help=t("vat_toggle_help"), key="prices_incl_vat")
     # Keyed by country so the prefilled rate follows the country selection
     vat_rate = st.number_input(t("vat_label"), 0.0, 50.0, float(COUNTRY_MAP[country]["vat"]), step=0.5,
@@ -349,7 +346,7 @@ usd_inflation = inflation / 100 if is_usd else us_infl.value / 100
 
 common = dict(base_cogs=base_cogs, fixed_monthly=fixed_monthly, capacity=capacity or np.inf, period=timeframe,
               import_share=import_share / 100, base_comp_price=base_comp, current_price=current_price, max_price=max_price,
-              commission=commission / 100, payment_fee=payment_fee / 100,
+              fee_rate=fee_pct / 100,
               vat=vat_rate / 100 if prices_incl_vat else 0.0, extra_unit_cost=extra_cost,
               comp_match_cut=match_cut / 100, comp_match_rise=match_rise / 100)
 # Headline: today's costs and price level, no shock. Scenario: the sliders, 12 months out.
@@ -382,8 +379,7 @@ limits = ", ".join(t(f"limit_{b}") for b in rec.binding)
 breakdown = [
     ("breakdown_price", rec.price),
     ("breakdown_vat", -(rec.price - rec.price / (1 + today_params.vat))),
-    ("breakdown_commission", -today_params.commission * rec.price),
-    ("breakdown_payment", -today_params.payment_fee * rec.price),
+    ("breakdown_fees", -today_params.fee_rate * rec.price),
     ("breakdown_cogs", -(today.cogs_final - extra_cost)),
     ("breakdown_extra", -extra_cost),
 ]
@@ -707,7 +703,7 @@ summary = ([(t("product_label"), product)] if product else []) + [
                             floor=money(price_floor, sym) if price_floor else "—",
                             ceiling=money(price_ceiling, sym) if price_ceiling else "—",
                             ending=t(f"ending_{ending.lstrip('.')}"))),
-    (t("sum_fees"), t("sum_fees_value", commission=commission, payment=payment_fee, vat=vat_text,
+    (t("sum_fees"), t("sum_fees_value", fees=fee_pct, vat=vat_text,
                       extra=money(extra_cost, sym))),
     (t("reaction_header"), t("sum_reaction_value", cut=match_cut, rise=match_rise)
      + (f" · {t('caption_no_reaction', price=money(no_reaction.price, sym))}" if no_reaction else "")),
@@ -794,7 +790,7 @@ current_settings = dict(
     drop_dupes=drop_dupes, country=country, timeframe=timeframe, default_cogs=default_cogs,
     cost_override=cost_override, fixed_monthly=fixed_monthly, capacity=capacity, import_share=import_share,
     model_kind=model_kind, use_real=use_real, use_season=seasonal, product=product, max_price=max_price,
-    commission=commission, payment_fee=payment_fee, prices_incl_vat=prices_incl_vat, vat_rate=vat_rate,
+    variable_fees=fee_pct, prices_incl_vat=prices_incl_vat, vat_rate=vat_rate,
     extra_unit_cost=extra_cost, max_change=max_change, min_margin=min_margin, price_floor=price_floor,
     price_ceiling=price_ceiling, ending=ending,
     # The sliders' own values: match_cut/rise are forced to 0 when the data has no competitor column

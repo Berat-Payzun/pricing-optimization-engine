@@ -7,7 +7,7 @@ from scenarios import ScenarioError, dump, load, plan_matches, session_updates
 
 SETTINGS = {
     "country": "TR", "timeframe": "Monthly", "default_cogs": 10.0, "capacity": 0, "import_share": 30,
-    "model_kind": "loglog", "use_real": True, "product": "Kahve", "max_price": 120.0, "commission": 15.0,
+    "model_kind": "loglog", "use_real": True, "product": "Kahve", "max_price": 120.0, "variable_fees": 15.0,
     "prices_incl_vat": True, "vat_rate": 20.0, "max_change": 15.0, "ending": ".99", "comp_match_cut": 50,
     "comp_match_rise": 0, "shock_infl": 29.5, "shock_fx": 18.5, "shock_passthrough": False, "test_step": 10.0,
 }
@@ -39,16 +39,33 @@ def test_dump_ignores_unknown_keys_and_casts_numpy_like_values():
 
 def test_unknown_mistyped_and_out_of_range_values():
     d = json.loads(doc())
-    d["settings"].update({"hacker": "rm -rf", "country": "XX", "commission": "lots", "use_real": 1,
+    d["settings"].update({"hacker": "rm -rf", "country": "XX", "variable_fees": "lots", "use_real": 1,
                           "import_share": 150, "shock_fx": -80.0, "capacity": 2.5, "max_change": float("nan")})
     loaded = load(json.dumps(d).encode())
     s = loaded.settings
     assert s["import_share"] == 100 and s["shock_fx"] == -50.0  # clipped
-    for key in ("hacker", "country", "commission", "use_real", "capacity", "max_change"):
+    for key in ("hacker", "country", "variable_fees", "use_real", "capacity", "max_change"):
         assert key not in s
     keys = {w.key: w.params["keys"] for w in loaded.warnings}
     assert set(keys) == {"scen_warn_dropped", "scen_warn_clipped"}
     assert "import_share" in keys["scen_warn_clipped"] and "hacker" in keys["scen_warn_dropped"]
+
+
+@pytest.mark.parametrize("old,expected,warned", [
+    ({"commission": 15.0, "payment_fee": 2.0}, 17.0, set()),
+    ({"commission": 12.5}, 12.5, set()),
+    ({"commission": 80.0, "payment_fee": 20.0}, 90.0, {"scen_warn_clipped"}),
+    ({"commission": 15.0, "payment_fee": "two"}, None, {"scen_warn_dropped"}),
+])
+def test_legacy_commission_and_payment_fee_are_summed(old, expected, warned):
+    d = json.loads(doc(schema=1))
+    del d["settings"]["variable_fees"]
+    d["settings"].update(old)
+    loaded = load(json.dumps(d).encode())
+    assert loaded.settings.get("variable_fees") == expected
+    assert "commission" not in loaded.settings and "payment_fee" not in loaded.settings
+    assert {w.key for w in loaded.warnings} == warned
+    assert all("commission" not in w.params.get("keys", "") for w in loaded.warnings)
 
 
 @pytest.mark.parametrize("raw,key", [
