@@ -64,7 +64,16 @@ Without a key the app still runs: FRED series fall back to built-in values, and 
 
 Streamlit Community Cloud pulls every push to `main` and reloads `app.py`, but modules it imports (`optimizer.py`, `macro_api.py`, …) can stay loaded in their old version. A change that touches both can then fail with errors like `TypeError: ScenarioParams.__init__() got an unexpected keyword argument`. After merging such a change, open **Manage app → ⋮ → Reboot app**.
 
-The app opens with `sample_data.csv` loaded. You can regenerate it with `python scripts/generate_sample_data.py`; its true demand is `Q/day = 120 − 2·P + 1·P_comp`. Run the tests with `pytest`.
+The app opens with `sample_data.csv` loaded: four products with known demand curves, each showing a different feature. Regenerate it with `python scripts/generate_sample_data.py`.
+
+| Product | History | True demand | Try |
+|---|---|---|---|
+| Classic Mug | 24 months | `Q/day = 120 − 2·P + 1·P_comp`, weekend promos flagged | The default view; Auto picks linear |
+| Travel Mug | 24 months | Constant elasticity −1.8, demand growing 2% a month, no competitor prices | Turn on the growth trend: Auto switches to log-log and the backtest error drops |
+| Gift Set | 36 months | `Q/day = (60 − 0.8·P + 0.4·P_comp) × season` (Nov/Dec peak), December stockouts flagged | Turn on seasonality: the backtest error drops |
+| New Tumbler | 2 months | Just launched | Too few months to price: the **All products** table shows why |
+
+Run the tests with `pytest`.
 
 ## File format (CSV or Excel)
 

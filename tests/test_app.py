@@ -45,3 +45,17 @@ def test_app_survives_setting_changes(app, changes):
         next(x for x in widget if x.key == key).set_value(value)
     app.run()
     assert not app.exception
+
+
+def test_sample_data_shows_every_product(app):
+    assert app.selectbox(key="product").options == ["Classic Mug", "Gift Set", "New Tumbler", "Travel Mug"]
+    table = next(df.value for df in app.dataframe if "Product" in df.value.columns)
+    assert list(table["Product"]) == ["Classic Mug", "Gift Set", "New Tumbler", "Travel Mug"]
+    status = dict(zip(table["Product"], table["Status"]))
+    assert status["Classic Mug"] == "OK" and "Only 2 month(s)" in status["New Tumbler"]
+
+
+def test_too_short_product_shows_an_error_not_a_crash(app):
+    app.selectbox(key="product").set_value("New Tumbler").run()
+    assert not app.exception
+    assert any("Only 2 month(s)" in e.value for e in app.error)
