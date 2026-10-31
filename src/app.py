@@ -1,6 +1,4 @@
 """Pricing Optimization Engine: Streamlit dashboard.
-
-Run with:  streamlit run src/app.py
 """
 
 from __future__ import annotations
@@ -23,8 +21,10 @@ from config import (BOOTSTRAP_SAMPLES, COUNTRY_MAP, DEFAULTS, MAX_CHANGE_DEFAULT
                     TEST_DEFAULT_STEP, TEST_MAX_WEEKS, TEST_STEP_CHOICES)
 from data_ingestion import PRODUCT, DataValidationError, aggregate, deflate, load_csv
 from macro_api import FRED_KEY_ENV, fred_api_key, get_fx, get_inflation, uses_fred
-from optimizer import (ENDINGS, Guardrails, ScenarioParams, backtest, competitor_price_at, elasticities, evaluate_test,
-                       fit_demand, optimal_price_range, recommend, run_scenario, step_tradeoff, test_plan)
+from optimizer import (ENDINGS, Guardrails, ScenarioParams, backtest, best_model, bootstrap, competitor_price_at,
+                       elasticities, evaluate_test, fit_demand, recommend, run_scenario, sensitivity, step_tradeoff,
+                       test_plan)
+from portfolio import portfolio, product_inputs
 import scenarios
 from report import Chart, Series, VLine, build_excel, build_pdf
 from translations import LANGUAGES, Msg, localize, translate
@@ -86,8 +86,14 @@ def cached_backtest(agg: pd.DataFrame, kind: str, seasonal: bool, trend: bool):
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
-def cached_range(agg: pd.DataFrame, kind: str, seasonal: bool, trend: bool, params: dict):
-    return optimal_price_range(agg, kind, ScenarioParams(**params), seasonal, trend=trend)
+def cached_bootstrap(agg: pd.DataFrame, kind: str, seasonal: bool, trend: bool, params: dict, ped_price: float):
+    return bootstrap(agg, kind, ScenarioParams(**params), seasonal, trend=trend, ped_price=ped_price)
+
+
+@st.cache_data(show_spinner=False, max_entries=16)
+def cached_portfolio(rows: pd.DataFrame, cpi: pd.Series | None, model_choice: str, seasonal: bool, trend: bool,
+                     shared: dict, rails: dict):
+    return portfolio(rows, cpi, model_choice, seasonal, trend, shared, Guardrails(**rails))
 
 
 # ---------- language ----------
@@ -207,8 +213,9 @@ with st.sidebar:
                                value=0, step=500, help=t("capacity_help"), key="capacity")
     import_share = st.slider(t("import_label"), 0, 100, int(DEFAULTS["import_share"]),
                              help=t("import_help"), key="import_share")
-    model_kind = st.radio(t("model_label"), ["linear", "loglog"], horizontal=True,
-                          format_func=lambda k: t(f"model_{k}"), key="model_kind")
+    model_choice = st.radio(t("model_label"), ["auto", "linear", "loglog"], horizontal=True,
+                            format_func=lambda k: t(f"model_{k}"), help=t("model_help"), key="model_kind")
+    model_note = st.empty()  # which model "auto" picked, once both are fitted
     use_real = st.toggle(t("real_label"), value=True, help=t("real_help"), key="use_real")
 
 # ---------- data ----------
@@ -217,7 +224,7 @@ st.title(t("app_title"))
 st.caption(t("app_caption", country=t(f"country_{country}"), currency=COUNTRY_MAP[country]["currency"]))
 
 raw = upload.getvalue() if upload is not None else SAMPLE_PATH.read_bytes()
-product = None
+product = all_rows = None
 try:
     rows, data_warnings = load_rows(raw, default_cogs, drop_dupes)
     if PRODUCT in rows:
@@ -231,6 +238,7 @@ try:
                     st.session_state.scenario_status["product_missing"] = pending
             product = st.selectbox(t("product_label"), products, help=t("product_help"),
                                    key="product")
+        all_rows = rows
         rows = rows[rows[PRODUCT] == product].drop(columns=PRODUCT)
     agg, agg_warnings = aggregate(rows)
     data_warnings = data_warnings + agg_warnings
@@ -277,6 +285,12 @@ for kind in ("linear", "loglog"):
         models[kind] = e
 backtests = {kind: None if isinstance(m, Exception) else cached_backtest(agg, kind, seasonal, use_trend)
              for kind, m in models.items()}
+model_kind = best_model(models, backtests) if model_choice == "auto" else model_choice
+if model_kind is None:  # neither model could be fitted: report the linear fit's reason
+    model_kind = "linear"
+elif model_choice == "auto":
+    model_note.caption(t("model_auto_caption", model=t(f"model_{model_kind}"),
+                         wape=num(backtests[model_kind].wape * 100, ".1f", "%") if backtests[model_kind] else "—"))
 bt = backtests[model_kind]
 model = models[model_kind]
 if isinstance(model, Exception):
@@ -286,11 +300,9 @@ if isinstance(model, Exception):
 # Months mostly flagged as stockout/promo stay in the charts but not in the fit, and a promo
 # month's price is never "current"
 excluded = agg["Excluded"].astype(bool) if "Excluded" in agg else pd.Series(False, index=agg.index)
-latest = agg[~excluded].iloc[-1]
 # In the model's money (the last month's), which differs from the nominal price only when the last month is excluded
-current_price = float(latest["Real_Price"])
-base_cogs = cost_override if cost_override > 0 else float(latest["Cost_Per_Unit"])
-base_comp = float(latest["Real_Competitor_Price"]) if model.has_comp else None
+current_price, latest_cogs, base_comp = product_inputs(agg, model)
+base_cogs = cost_override if cost_override > 0 else latest_cogs
 
 with st.sidebar:
     max_price_key = f"max_price_{model_kind}_{product}_{len(agg)}"
@@ -390,12 +402,11 @@ if match_cut or match_rise:
     no_reaction = recommend(model, still, run_scenario(model, still), rails)
 # The bootstrap range is for the unconstrained optimum: shown only when the recommendation is that
 # optimum, and never when there is no optimum inside the price range
-price_range = None
-if today.interior and not rec.binding:
-    try:
-        price_range = cached_range(agg, model_kind, seasonal, use_trend, asdict(today_params))
-    except ValueError:
-        pass
+try:
+    boot = cached_bootstrap(agg, model_kind, seasonal, use_trend, asdict(today_params), rec.price)
+except ValueError:
+    boot = None
+price_range = boot.price if boot is not None and today.interior and not rec.binding else None
 
 opt, rec_row = result.optimal, rec.row
 unconstrained = today.optimal["price"]
@@ -435,7 +446,14 @@ with metrics_area:
     c2.metric(t("metric_profit", per=per), money(rec_row["profit"], sym),
               money(rec_row["profit"] - today.baseline["profit"], sym),
               help=t("metric_profit_help", profit=money(today.baseline["profit"], sym)))
-    c3.metric(t("metric_ped"), num(ped_rec), help=t("metric_ped_help"))
+    with c3:
+        st.metric(t("metric_ped"), num(ped_rec), help=t("metric_ped_help"))
+        if boot is not None and boot.ped is not None:
+            st.caption(t("metric_ped_ci", low=num(boot.ped[0]), high=num(boot.ped[1])),
+                       help=t("metric_ped_ci_help", n=BOOTSTRAP_SAMPLES))
+            conf = boot.ped_confidence
+            st.badge(t(f"badge_conf_{conf}"), color={"high": "green", "medium": "orange", "low": "red"}[conf],
+                     icon=":material/insights:")
     with c4:
         if bt is not None:
             # Out-of-sample forecast error replaces the flattering in-sample R²
@@ -494,6 +512,56 @@ with metrics_area, st.expander(t("breakdown_expander")):
         st.caption(t("breakdown_caption", units=f"{rec_row['q_sold']:,.0f}", per=per,
                      contribution=money(unit_margin * rec_row["q_sold"], sym), fixed=money(today.fixed_final, sym),
                      profit=money(rec_row["profit"], sym)))
+
+# ---------- sensitivity (tornado) ----------
+
+sens = sensitivity(model, today_params) if today.interior else None
+with metrics_area, st.expander(t("sens_expander"), icon=":material/tune:"):
+    if sens is None or sens.empty:
+        st.caption(t("sens_na"))
+    else:
+        base_price = sens.attrs["base_price"]
+        names = [t(f"sens_factor_{f}") for f in sens["factor"]][::-1]  # biggest at the top
+        fig = go.Figure()
+        for side, color in (("low", col["s2"]), ("high", col["s1"])):
+            fig.add_trace(go.Bar(
+                y=names, x=(sens[f"price_{side}"] - base_price).to_numpy()[::-1], orientation="h",
+                name=t(f"sens_{side}"), marker_color=color,
+                customdata=np.stack([sens[f"price_{side}"], sens[f"profit_{side}"]], axis=1)[::-1],
+                hovertemplate=sym + "%{customdata[0]:,.2f} · " + t("sens_profit") + " " + sym
+                + "%{customdata[1]:,.0f}<extra></extra>"))
+        style(fig, t("sens_title", price=money(base_price, sym)), t("sens_axis", sym=sym), "", height=300)
+        fig.update_layout(barmode="overlay")
+        fig.add_vline(x=0, line=dict(color=col["muted"], width=1))
+        st.plotly_chart(fig, width="stretch")
+        st.caption(t("sens_caption"))
+
+# ---------- portfolio (files with several products) ----------
+
+pf = None
+if all_rows is not None:
+    shared = dict(period=timeframe, import_share=import_share / 100, fee_rate=fee_pct / 100,
+                  vat=today_params.vat, extra_unit_cost=extra_cost,
+                  comp_match_cut=match_cut / 100, comp_match_rise=match_rise / 100)
+    pf_rails = dict(max_change=max_change / 100, min_margin=min_margin / 100, ending=ending)
+    with st.spinner(t("pf_spinner")):
+        pf = cached_portfolio(all_rows, infl.series if use_real else None, model_choice, seasonal, use_trend,
+                              shared, pf_rails)
+    pf_view = pd.DataFrame({
+        t("pf_col_product"): pf["product"],
+        t("pf_col_model"): [t(f"model_{k}") if isinstance(k, str) else "—" for k in pf["model"]],
+        t("pf_col_current"): [money(v, sym) if pd.notna(v) else "—" for v in pf["current_price"]],
+        t("pf_col_rec"): [money(v, sym) if pd.notna(v) else "—" for v in pf["rec_price"]],
+        t("pf_col_change"): [num(v * 100, "+.1f", "%") for v in pf["change"]],
+        t("pf_col_ped"): [num(v) for v in pf["ped"]],
+        t("pf_col_uplift", per=per): [money(v, sym) if pd.notna(v) else "—" for v in pf["uplift"]],
+        t("pf_col_wape"): [num(v * 100, ".1f", "%") for v in pf["wape"]],
+        t("pf_col_status"): [t("pf_status_ok") if s == "ok" else t("pf_status_no_optimum") if s == "no_optimum"
+                             else localize(e, lang) for s, e in zip(pf["status"], pf["error"])],
+    })
+    with metrics_area, st.expander(t("pf_expander", n=len(pf)), icon=":material/inventory_2:"):
+        st.caption(t("pf_caption", per=per))
+        st.dataframe(pf_view, hide_index=True, width="stretch")
 
 # ---------- charts ----------
 
@@ -729,6 +797,8 @@ summary = ([(t("product_label"), product)] if product else []) + [
     (t("metric_profit", per=per), money(rec_row["profit"], sym)),
     (t("sum_profit_current", per=per), money(today.baseline["profit"], sym)),
     (t("metric_ped"), num(ped_rec)),
+    (t("sum_ped_ci"), f"{num(boot.ped[0])} – {num(boot.ped[1])} ({t(f'badge_conf_{boot.ped_confidence}')})"
+     if boot is not None and boot.ped is not None else "—"),
     (t("metric_backtest"), t("sum_backtest_value", wape=bt.wape * 100, naive=bt.naive_wape * 100, n=len(bt.months))
      if bt is not None and np.isfinite(bt.wape) and np.isfinite(bt.naive_wape) else "—"),
     (t("metric_r2"), f"{model.r2:.2f}"),
@@ -778,6 +848,12 @@ sheets = {
     t("sheet_monthly"): agg.round(4).reset_index(),
     t("sheet_models"): model_table,
     t("sheet_test_plan"): plan_table,  # Actual column left empty to fill in during the test
+    **({t("sheet_portfolio"): pf_view} if pf is not None else {}),
+    **({t("sheet_sensitivity"): pd.DataFrame({
+        t("sens_col_factor"): [t(f"sens_factor_{f}") for f in sens["factor"]],
+        t("sens_col_price_low"): sens["price_low"].round(2), t("sens_col_price_high"): sens["price_high"].round(2),
+        t("sens_col_profit_low"): sens["profit_low"].round(2), t("sens_col_profit_high"): sens["profit_high"].round(2),
+    })} if sens is not None and not sens.empty else {}),
     **({t("sheet_backtest"): pd.DataFrame({t("col_month"): bt.months.strftime("%Y-%m"), t("chart_actual"): bt.actual,
                                            t("chart_forecast"): bt.forecast, t("chart_naive"): bt.naive}).round(2)}
        if bt is not None else {}),
@@ -824,7 +900,7 @@ actual_units = pd.to_numeric(edited[t("col_actual")], errors="coerce")
 current_settings = dict(
     drop_dupes=drop_dupes, country=country, timeframe=timeframe, default_cogs=default_cogs,
     cost_override=cost_override, fixed_monthly=fixed_monthly, capacity=capacity, import_share=import_share,
-    model_kind=model_kind, use_real=use_real, use_season=seasonal, use_trend=use_trend, product=product, max_price=max_price,
+    model_kind=model_choice, use_real=use_real, use_season=seasonal, use_trend=use_trend, product=product, max_price=max_price,
     variable_fees=fee_pct, prices_incl_vat=prices_incl_vat, vat_rate=vat_rate,
     extra_unit_cost=extra_cost, max_change=max_change, min_margin=min_margin, price_floor=price_floor,
     price_ceiling=price_ceiling, ending=ending,

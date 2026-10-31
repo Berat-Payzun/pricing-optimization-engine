@@ -43,7 +43,7 @@ SETTINGS: dict[str, Setting] = {
     "fixed_monthly": Setting(float, 0.0),
     "capacity": Setting(int, 0),
     "import_share": Setting(int, 0, 100),
-    "model_kind": Setting(str, choices=("linear", "loglog")),
+    "model_kind": Setting(str, choices=("auto", "linear", "loglog")),
     "use_real": Setting(bool),
     "use_season": Setting(bool),
     "use_trend": Setting(bool),

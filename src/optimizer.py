@@ -19,7 +19,7 @@ current and a test price week by week (test_plan, evaluate_test).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import pandas as pd
@@ -712,17 +712,36 @@ def evaluate_test(plan: TestPlan, actual) -> TestVerdict | None:
     )
 
 
-def optimal_price_range(agg: pd.DataFrame, kind: str, params: ScenarioParams, seasonal: bool = False,
-                        n: int = BOOTSTRAP_SAMPLES, coverage: float = 0.9, seed: int = 0,
-                        trend: bool = False) -> tuple[float, float] | None:
-    """Bootstrap range of P*: refit demand on months resampled with replacement and re-run
-    the scenario each time. Returns the central `coverage` interval, or None if fewer than
-    half of the resamples could be fitted (e.g. too little price variation)."""
+@dataclass
+class Bootstrap:
+    price: tuple[float, float]  # central interval of the optimal price P*
+    ped: tuple[float, float] | None  # central interval of PED at `ped_price`, None if it can't be computed
+    ped_price: float
+
+    @property
+    def ped_confidence(self) -> str:
+        """How tightly the data pins down price sensitivity: "high", "medium" or "low"."""
+        if self.ped is None or self.ped[1] >= 0:  # not even sure demand falls with price
+            return "low"
+        low, high = self.ped
+        width = (high - low) / abs((low + high) / 2)
+        return "high" if width < 0.5 else "medium" if width < 1.0 else "low"
+
+
+def bootstrap(agg: pd.DataFrame, kind: str, params: ScenarioParams, seasonal: bool = False,
+              n: int = BOOTSTRAP_SAMPLES, coverage: float = 0.9, seed: int = 0, trend: bool = False,
+              ped_price: float | None = None) -> Bootstrap | None:
+    """Refit demand on months resampled with replacement, and each time re-run the scenario and
+    take the elasticity at `ped_price` (default: the current price). Returns the central
+    `coverage` intervals of P* and PED, or None if fewer than half of the resamples could be
+    fitted (e.g. too little price variation)."""
     d = _design(agg, kind, seasonal, trend)  # raises like fit_demand if the data can't be fitted
     s = _setup(d.comp_col is not None, params)
     mult = PERIOD_MULT[params.period]
+    ped_price = params.current_price if ped_price is None else ped_price
+    ped_comp = _scalar(_comp_at(params, s, ped_price))
     rng = np.random.default_rng(seed)
-    prices = []
+    prices, peds = [], []
     for _ in range(n):
         idx = rng.integers(0, len(d.y), len(d.y))
         X, y = d.X[idx], d.y[idx]
@@ -736,8 +755,71 @@ def optimal_price_range(agg: pd.DataFrame, kind: str, params: ScenarioParams, se
         profit = _economics(model, s.grid, _comp_at(params, s, s.grid), s.cogs_final, s.fixed_final, params.capacity, mult,
                             s.level, params.vat, params.fee_rate)["profit"]
         prices.append(s.grid[int(np.argmax(profit))])
+        peds.append(elasticities(model, ped_price / s.level, ped_comp)[0])
     if len(prices) < n / 2:
         return None
     tail = (1 - coverage) / 2 * 100
     low, high = np.percentile(prices, [tail, 100 - tail])
-    return float(low), float(high)
+    peds = [e for e in peds if np.isfinite(e)]  # NaN where linear demand is zero at that price
+    ped = tuple(float(v) for v in np.percentile(peds, [tail, 100 - tail])) if len(peds) >= n / 2 else None
+    return Bootstrap((float(low), float(high)), ped, float(ped_price))
+
+
+def optimal_price_range(agg: pd.DataFrame, kind: str, params: ScenarioParams, seasonal: bool = False,
+                        n: int = BOOTSTRAP_SAMPLES, coverage: float = 0.9, seed: int = 0,
+                        trend: bool = False) -> tuple[float, float] | None:
+    """Bootstrap range of P* only (see bootstrap)."""
+    b = bootstrap(agg, kind, params, seasonal, n, coverage, seed, trend)
+    return None if b is None else b.price
+
+
+def best_model(models: dict, backtests: dict) -> str | None:
+    """The model kind to use when the user picks "auto": the lowest backtest error, or the higher
+    in-sample R² when no backtest could be run. `models` maps kind → DemandModel or the fit's
+    exception; None when no model could be fitted."""
+    fitted = [k for k, m in models.items() if isinstance(m, DemandModel)]
+    if not fitted:
+        return None
+    tested = [k for k in fitted if backtests.get(k) is not None and np.isfinite(backtests[k].wape)]
+    if tested:
+        return min(tested, key=lambda k: backtests[k].wape)
+    return max(fitted, key=lambda k: models[k].r2)
+
+
+SENSITIVITY_FACTORS = ("cogs", "elasticity", "fees", "competitor", "fx", "vat")
+
+
+def sensitivity(model: DemandModel, p: ScenarioParams, delta: float = 0.10,
+                factors=SENSITIVITY_FACTORS) -> pd.DataFrame:
+    """Tornado data: the optimal price and profit with one input moved by −delta and +delta
+    (relative; FX and competitor as a shift of that size), all others as in `p`. Inputs that
+    can't move the result (no fees, no VAT, no imported share, no competitor data) are left out.
+    Sorted by how far the optimal price moves."""
+    base = run_scenario(model, p).optimal
+    rows = []
+    for factor in factors:
+        if ((factor == "fees" and p.fee_rate == 0) or (factor == "vat" and p.vat == 0)
+                or (factor == "fx" and p.import_share == 0) or (factor == "competitor" and not model.has_comp)):
+            continue
+        out = {"factor": factor}
+        for label, sign in (("low", -1), ("high", 1)):
+            m, q, step = model, p, 1 + sign * delta
+            if factor == "cogs":
+                q = replace(p, base_cogs=p.base_cogs * step)
+            elif factor == "elasticity":  # +: customers react more strongly to price
+                m = replace(model, b=model.b * step)
+            elif factor == "fees":
+                q = replace(p, fee_rate=p.fee_rate * step)
+            elif factor == "vat":
+                q = replace(p, vat=p.vat * step)
+            elif factor == "competitor":
+                q = replace(p, comp_shift=p.comp_shift + sign * delta)
+            elif factor == "fx":
+                q = replace(p, fx_shift=p.fx_shift + sign * delta)
+            opt = run_scenario(m, q).optimal
+            out[f"price_{label}"], out[f"profit_{label}"] = float(opt["price"]), float(opt["profit"])
+        rows.append(out)
+    df = pd.DataFrame(rows, columns=["factor", "price_low", "profit_low", "price_high", "profit_high"])
+    df.attrs.update(base_price=float(base["price"]), base_profit=float(base["profit"]))
+    spread = (df["price_high"] - df["price_low"]).abs()
+    return df.loc[spread.sort_values(ascending=False).index].reset_index(drop=True)
