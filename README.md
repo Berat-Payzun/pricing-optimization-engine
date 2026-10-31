@@ -1,10 +1,31 @@
 # Pricing Optimization Engine
 
+[![Live demo](https://img.shields.io/badge/demo-live-FF4B4B?logo=streamlit&logoColor=white)](https://pricing-optimization-engine.streamlit.app)
 [![tests](https://github.com/Berat-Payzun/pricing-optimization-engine/actions/workflows/tests.yml/badge.svg)](https://github.com/Berat-Payzun/pricing-optimization-engine/actions/workflows/tests.yml)
 
 A Streamlit app that finds the **profit-maximizing price** for a product from its sales history and stress-tests it against **live macroeconomic data**: CPI inflation and exchange rates for the selected country.
 
 Upload a CSV or Excel file of past prices and quantities. The engine fits a demand curve, sweeps 2,000 candidate prices, and charts revenue, cost and net profit against price. The headline is a **recommended price for today**: today's costs and price level, after VAT and channel fees, within your guardrails. Separately, sliders simulate the next 12 months of inflation, currency and competitor shocks.
+
+**Try it:** [pricing-optimization-engine.streamlit.app](https://pricing-optimization-engine.streamlit.app) opens with a four-product sample file loaded, so there's nothing to upload.
+
+![The app on the bundled sample data: recommended price, profit, elasticity with its confidence interval, backtest error and live CPI, above the profit / revenue / cost curve](assets/screenshot.png)
+
+## How it works
+
+```mermaid
+flowchart LR
+    A[Sales file<br/>CSV / Excel] --> B[Clean & aggregate<br/>monthly, flags, duplicates]
+    M[(FRED · ONS · OECD<br/>Yahoo Finance)] --> C
+    B --> C[Deflate prices<br/>with CPI]
+    C --> D[Fit demand<br/>linear & log-log<br/>season · trend]
+    D --> E[Backtest<br/>Auto picks the model]
+    E --> F[Profit sweep<br/>2,000 prices<br/>fees · VAT · FX · inflation]
+    F --> G[Guardrails<br/>max change · margin<br/>floor · ceiling · endings]
+    G --> H[Recommended price]
+    H --> I[Bootstrap range<br/>tornado · price test]
+    H --> J[Excel / PDF<br/>All products table]
+```
 
 ## Features
 
@@ -151,8 +172,10 @@ For linear demand without a capacity cap, the result matches the closed-form opt
 ## Project structure
 
 ```
-├── .github/workflows/tests.yml   # runs pytest with coverage on every push and pull request
+├── .github/workflows/tests.yml   # runs Ruff and pytest with coverage on every push and pull request
 ├── assets/fonts/          # DejaVu Sans for the PDF export (covers Turkish letters and ₺)
+├── assets/screenshot.png  # README screenshot
+├── ruff.toml              # lint settings
 ├── sample_data.csv
 ├── scripts/generate_sample_data.py
 ├── src/
