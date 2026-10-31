@@ -81,13 +81,13 @@ def load_rows(raw: bytes, default_cogs: float, drop_duplicates: bool):
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
-def cached_backtest(agg: pd.DataFrame, kind: str, seasonal: bool):
-    return backtest(agg, kind, seasonal)
+def cached_backtest(agg: pd.DataFrame, kind: str, seasonal: bool, trend: bool):
+    return backtest(agg, kind, seasonal, trend=trend)
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
-def cached_range(agg: pd.DataFrame, kind: str, seasonal: bool, params: dict):
-    return optimal_price_range(agg, kind, ScenarioParams(**params), seasonal)
+def cached_range(agg: pd.DataFrame, kind: str, seasonal: bool, trend: bool, params: dict):
+    return optimal_price_range(agg, kind, ScenarioParams(**params), seasonal, trend=trend)
 
 
 # ---------- language ----------
@@ -143,8 +143,9 @@ def style(fig: go.Figure, title: str, xtitle: str, ytitle: str, height: int = 38
     return fig
 
 
-def reset_shocks(infl, fx):
+def reset_shocks(infl, fx, us_infl):
     st.session_state.shock_infl = float(np.clip(round(infl.value, 1), -10.0, 100.0))
+    st.session_state.shock_usd_infl = float(np.clip(round(us_infl.value, 1), -10.0, 100.0))
     st.session_state.shock_fx = float(np.clip(round(fx.change_pct or 0.0, 1), -50.0, 100.0))
     st.session_state.shock_comp = 0.0
 
@@ -266,14 +267,15 @@ if fred_api_key() is None and uses_fred(country):
 with st.sidebar:
     seasonal = st.toggle(t("season_label"), value=len(agg) >= SEASONAL_MIN_MONTHS,
                          help=t("season_help", min_n=SEASONAL_MIN_MONTHS), key="use_season")
+    use_trend = st.toggle(t("trend_label"), value=False, help=t("trend_help"), key="use_trend")
 
 models = {}
 for kind in ("linear", "loglog"):
     try:
-        models[kind] = fit_demand(agg, kind, seasonal)
+        models[kind] = fit_demand(agg, kind, seasonal, use_trend)
     except ValueError as e:
         models[kind] = e
-backtests = {kind: None if isinstance(m, Exception) else cached_backtest(agg, kind, seasonal)
+backtests = {kind: None if isinstance(m, Exception) else cached_backtest(agg, kind, seasonal, use_trend)
              for kind, m in models.items()}
 bt = backtests[model_kind]
 model = models[model_kind]
@@ -331,7 +333,7 @@ with st.sidebar:
 
 # Live macro values become the slider defaults, refreshed whenever the country changes
 if st.session_state.get("shock_country") != country:
-    reset_shocks(infl, fx)
+    reset_shocks(infl, fx, us_infl)
     st.session_state.shock_country = country
 
 metrics_area = st.container()
@@ -342,9 +344,14 @@ charts_area = st.container()
 st.divider()
 st.subheader(t("shock_header"))
 st.caption(t("shock_caption"))
-s1, s2, s3, s4 = st.columns([3, 3, 3, 1.4], vertical_alignment="bottom")
+s1, s5, s2, s3, s4 = st.columns([3, 3, 3, 3, 1.4], vertical_alignment="bottom")
 with s1:
     inflation = st.slider(t("shock_infl"), -10.0, 100.0, step=0.5, key="shock_infl", help=t("shock_infl_help"))
+with s5:
+    # Imported inputs are priced in USD, so they inflate at the US rate. For USD countries every
+    # input is local and follows the inflation slider.
+    usd_infl_pct = st.slider(t("shock_usd_infl"), -10.0, 100.0, step=0.5, key="shock_usd_infl", disabled=is_usd,
+                             help=t("shock_usd_infl_help", source=us_infl.source, as_of=us_infl.as_of or "—"))
 with s2:
     fx_shift = st.slider(t("shock_fx"), -50.0, 100.0, step=0.5, key="shock_fx", help=t("shock_fx_help"),
                          disabled=is_usd)
@@ -353,16 +360,14 @@ with s3:
                            disabled=not model.has_comp,
                            help=None if model.has_comp else t("shock_comp_help"))
 with s4:
-    st.button(t("shock_reset"), on_click=reset_shocks, args=(infl, fx), width="stretch")
+    st.button(t("shock_reset"), on_click=reset_shocks, args=(infl, fx, us_infl), width="stretch")
 passthrough = st.toggle(t("shock_passthrough"), value=True, key="shock_passthrough", help=t("shock_passthrough_help"))
 if not model.has_comp:
     st.caption(t("shock_comp_disabled"))
 
 # ---------- scenarios ----------
 
-# Imported inputs are priced in USD, so they inflate at the US rate (for USD countries
-# every input is local, so they follow the slider like everything else).
-usd_inflation = inflation / 100 if is_usd else us_infl.value / 100
+usd_inflation = (inflation if is_usd else usd_infl_pct) / 100
 
 common = dict(base_cogs=base_cogs, fixed_monthly=fixed_monthly, capacity=capacity or np.inf, period=timeframe,
               import_share=import_share / 100, base_comp_price=base_comp, current_price=current_price, max_price=max_price,
@@ -388,7 +393,7 @@ if match_cut or match_rise:
 price_range = None
 if today.interior and not rec.binding:
     try:
-        price_range = cached_range(agg, model_kind, seasonal, asdict(today_params))
+        price_range = cached_range(agg, model_kind, seasonal, use_trend, asdict(today_params))
     except ValueError:
         pass
 
@@ -569,6 +574,7 @@ sc1.metric(t("scenario_opt_label", month=scenario_month), money(opt["price"], sy
            help=t("scenario_opt_help", month=scenario_month))
 sc2.metric(t("scenario_profit_label", per=per), money(opt["profit"], sym))
 sc3.metric(t("scenario_cogs_label"), money(result.cogs_final, sym))
+st.caption(t("scenario_no_rails"))
 for w in result.warnings:
     st.warning(localize(w, lang), icon=":material/warning:")
 
@@ -713,6 +719,7 @@ summary = ([(t("product_label"), product)] if product else []) + [
     (t("timeframe_label"), t(f"timeframe_{timeframe}")),
     (t("model_label"), t(f"model_{model_kind}")),
     (t("season_label"), on_off(model.season is not None)),
+    (t("trend_label"), on_off(model.trend is not None)),
     (t("real_label"), on_off(use_real)),
     (t("sum_current_price"), money(current_price, sym)),
     (t("metric_rec_price"), f"{money(rec.price, sym)} · {t('metric_opt_delta', pct=(rec.price / current_price - 1) * 100)}"),
@@ -743,6 +750,7 @@ summary = ([(t("product_label"), product)] if product else []) + [
                            diff=f"{plan.diff:+,.0f}")),
     (t("sum_scenario"), scenario_month),
     (t("shock_infl"), f"{inflation:.1f}%"),
+    (t("shock_usd_infl"), "—" if is_usd else f"{usd_infl_pct:.1f}%"),
     (t("shock_fx"), "—" if is_usd else f"{fx_shift:+.1f}%"),
     (t("shock_comp"), f"{comp_shift:+.0f}%" if model.has_comp else "—"),
     (t("shock_passthrough"), on_off(passthrough)),
@@ -816,13 +824,13 @@ actual_units = pd.to_numeric(edited[t("col_actual")], errors="coerce")
 current_settings = dict(
     drop_dupes=drop_dupes, country=country, timeframe=timeframe, default_cogs=default_cogs,
     cost_override=cost_override, fixed_monthly=fixed_monthly, capacity=capacity, import_share=import_share,
-    model_kind=model_kind, use_real=use_real, use_season=seasonal, product=product, max_price=max_price,
+    model_kind=model_kind, use_real=use_real, use_season=seasonal, use_trend=use_trend, product=product, max_price=max_price,
     variable_fees=fee_pct, prices_incl_vat=prices_incl_vat, vat_rate=vat_rate,
     extra_unit_cost=extra_cost, max_change=max_change, min_margin=min_margin, price_floor=price_floor,
     price_ceiling=price_ceiling, ending=ending,
     # The sliders' own values: match_cut/rise are forced to 0 when the data has no competitor column
     comp_match_cut=st.session_state.get("comp_match_cut", 0), comp_match_rise=st.session_state.get("comp_match_rise", 0),
-    shock_infl=inflation, shock_fx=fx_shift, shock_comp=comp_shift, shock_passthrough=passthrough, test_step=test_step,
+    shock_infl=inflation, shock_usd_infl=usd_infl_pct, shock_fx=fx_shift, shock_comp=comp_shift, shock_passthrough=passthrough, test_step=test_step,
 )
 saved_test = ({"test_price": plan.test_price, "current_price": current_price, "weeks": plan.weeks,
                "actual": [None if pd.isna(a) else float(a) for a in actual_units]}

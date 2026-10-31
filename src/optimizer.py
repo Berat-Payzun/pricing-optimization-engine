@@ -46,16 +46,23 @@ class DemandModel:
     # intercept is for an average month, so the optimizer prices for a typical month.
     season: np.ndarray | None = None
     resid_sd: float = 0.0  # in-sample SD of monthly quantity residuals (degrees-of-freedom adjusted)
+    # Change in demand per month (units for linear, log units for log-log) or None. The intercept is
+    # for the last fitted month, so the optimizer prices at today's demand level, not a past average.
+    trend: float | None = None
 
     @property
     def has_comp(self) -> bool:
         return self.c is not None
 
-    def predict(self, price, comp_price: float | None = None, month: int | None = None) -> np.ndarray:
+    def predict(self, price, comp_price: float | None = None, month: int | None = None,
+                months_ahead: float = 0.0) -> np.ndarray:
         """Monthly quantity demanded at `price` (scalar or array), for an average month
-        unless `month` (1-12) is given and the model is seasonal."""
+        unless `month` (1-12) is given and the model is seasonal. With a trend, demand is at the
+        last fitted month's level, moved on by `months_ahead` months."""
         p = np.asarray(price, dtype=float)
         s = self.season[month - 1] if self.season is not None and month is not None else 0.0
+        if self.trend is not None:
+            s = s + self.trend * months_ahead
         if self.kind == "linear":
             q = self.intercept + s + self.b * p
             if self.has_comp:
@@ -68,6 +75,8 @@ class DemandModel:
 
     def equation(self, symbol: str = "") -> str:
         comp, season = self.has_comp, " + s(month)" if self.season is not None else ""
+        if self.trend is not None:
+            season += f" {self.trend:+,.3f}·t"
         if self.kind == "linear":
             s = f"Q = {self.intercept:,.2f} {self.b:+,.3f}·P"
             return s + (f" {self.c:+,.3f}·P_comp" if comp else "") + season
@@ -78,6 +87,11 @@ class DemandModel:
 def month_dummies(index: pd.DatetimeIndex) -> np.ndarray:
     """One column per month Feb..Dec (January is the base)."""
     return (np.asarray(index.month)[:, None] == np.arange(2, 13)).astype(float)
+
+
+def month_number(index: pd.DatetimeIndex) -> np.ndarray:
+    """Months since year 0, so gaps in the data keep their real length."""
+    return np.asarray(index.year * 12 + index.month - 1, dtype=float)
 
 
 @dataclass
@@ -91,9 +105,10 @@ class _Design:
     n_dropped: int
     use_season: bool
     warnings: list[str]
+    t_last: float | None = None  # trend column (last X column) value of the last month, or None without a trend
 
 
-def _design(agg: pd.DataFrame, kind: str, seasonal: bool) -> _Design:
+def _design(agg: pd.DataFrame, kind: str, seasonal: bool, trend: bool = False) -> _Design:
     if "Excluded" in agg:  # stockout / promo months (data_ingestion.aggregate)
         agg = agg[~agg["Excluded"].astype(bool)]
     price_col = "Real_Price" if "Real_Price" in agg else "Price_Charged"
@@ -120,15 +135,25 @@ def _design(agg: pd.DataFrame, kind: str, seasonal: bool) -> _Design:
         warnings.append(Msg("warn_season_short", n=len(data), min_n=SEASONAL_MIN_MONTHS))
     if use_season:
         X = np.hstack([X, month_dummies(data.index)])
+    # Months counted from the first month of `agg`, so a backtest's shorter training windows share the origin
+    t = month_number(data.index) - (month_number(agg.index[:1])[0] if len(agg) else 0.0)
+    if trend:
+        X = np.hstack([X, t[:, None]])
 
     if len(data) < X.shape[1] + 2:
         raise ValueError(Msg("err_not_enough_periods", n=len(data), kind=kind))
-    return _Design(data, price_col, comp_col, X, y, n_dropped, use_season, warnings)
+    return _Design(data, price_col, comp_col, X, y, n_dropped, use_season, warnings,
+                   float(t[-1]) if trend else None)
 
 
 def _model(d: _Design, kind: str, intercept: float, coef: np.ndarray, warnings: list[str]) -> DemandModel:
-    """Build a DemandModel from regression coefficients (price, [competitor], [Feb..Dec])."""
+    """Build a DemandModel from regression coefficients (price, [competitor], [Feb..Dec], [trend])."""
     n_prices = 2 if d.comp_col else 1
+    trend = None
+    if d.t_last is not None:
+        trend = float(coef[-1])
+        intercept += trend * d.t_last  # demand level of the last fitted month
+        coef = coef[:-1]
     season = None
     if d.use_season:
         effects = np.concatenate([[0.0], coef[n_prices:]])  # January = base month
@@ -146,21 +171,25 @@ def _model(d: _Design, kind: str, intercept: float, coef: np.ndarray, warnings: 
         p_max=float(d.data[d.price_col].max()),
         warnings=warnings,
         season=season,
+        trend=trend,
     )
 
 
-def fit_demand(agg: pd.DataFrame, kind: str = "linear", seasonal: bool = False) -> DemandModel:
+def fit_demand(agg: pd.DataFrame, kind: str = "linear", seasonal: bool = False, trend: bool = False) -> DemandModel:
     """OLS fit of monthly quantity on real price (and real competitor price if present),
-    optionally with month-of-year effects so seasonal swings aren't read as price effects."""
-    d = _design(agg, kind, seasonal)
+    optionally with month-of-year effects so seasonal swings aren't read as price effects, and a
+    linear time trend so growth or decline isn't read as a price effect (with deflated prices
+    under high inflation, the real price falls steadily over time)."""
+    d = _design(agg, kind, seasonal, trend)
     reg = LinearRegression().fit(d.X, d.y)
     model = _model(d, kind, reg.intercept_, reg.coef_, d.warnings)
     data, price_col, comp_col = d.data, d.price_col, d.comp_col
 
     q_actual = data["Quantity_Sold"].values
     comps = data[comp_col] if comp_col else [None] * len(data)
+    ahead = d.X[:, -1] - d.t_last if trend else np.zeros(len(data))
     q_hat = np.array([
-        model.predict(p, pc, month) for p, pc, month in zip(data[price_col], comps, data.index.month)
+        model.predict(p, pc, month, a) for p, pc, month, a in zip(data[price_col], comps, data.index.month, ahead)
     ])
     ss_res = float(((q_actual - q_hat) ** 2).sum())
     ss_tot = float(((q_actual - q_actual.mean()) ** 2).sum())
@@ -506,7 +535,8 @@ class Backtest:
         return self.wape < self.naive_wape
 
 
-def backtest(agg: pd.DataFrame, kind: str, seasonal: bool = False, horizon: int = BACKTEST_MONTHS) -> Backtest | None:
+def backtest(agg: pd.DataFrame, kind: str, seasonal: bool = False, horizon: int = BACKTEST_MONTHS,
+             trend: bool = False) -> Backtest | None:
     """Rolling one-month-ahead backtest: each of the last `horizon` months is forecast by a model
     fitted only on the months before it, at the price actually charged. The horizon shrinks to
     BACKTEST_MIN_MONTHS when the earliest training windows are too short to fit; None if even that fails.
@@ -520,10 +550,11 @@ def backtest(agg: pd.DataFrame, kind: str, seasonal: bool = False, horizon: int 
         try:
             forecast = []
             for i in range(len(data) - h, len(data)):
-                model = fit_demand(data.iloc[:i], kind, seasonal)
+                model = fit_demand(data.iloc[:i], kind, seasonal, trend)
                 row = data.iloc[i]
                 comp = float(row[comp_col]) if comp_col and model.has_comp else None
-                forecast.append(float(model.predict(float(row[price_col]), comp, data.index[i].month)))
+                ahead = float(month_number(data.index[i:i + 1])[0] - month_number(data.index[i - 1:i])[0])
+                forecast.append(float(model.predict(float(row[price_col]), comp, data.index[i].month, ahead)))
         except ValueError:
             continue
         q = data["Quantity_Sold"].to_numpy(dtype=float)
@@ -682,11 +713,12 @@ def evaluate_test(plan: TestPlan, actual) -> TestVerdict | None:
 
 
 def optimal_price_range(agg: pd.DataFrame, kind: str, params: ScenarioParams, seasonal: bool = False,
-                        n: int = BOOTSTRAP_SAMPLES, coverage: float = 0.9, seed: int = 0) -> tuple[float, float] | None:
+                        n: int = BOOTSTRAP_SAMPLES, coverage: float = 0.9, seed: int = 0,
+                        trend: bool = False) -> tuple[float, float] | None:
     """Bootstrap range of P*: refit demand on months resampled with replacement and re-run
     the scenario each time. Returns the central `coverage` interval, or None if fewer than
     half of the resamples could be fitted (e.g. too little price variation)."""
-    d = _design(agg, kind, seasonal)  # raises like fit_demand if the data can't be fitted
+    d = _design(agg, kind, seasonal, trend)  # raises like fit_demand if the data can't be fitted
     s = _setup(d.comp_col is not None, params)
     mult = PERIOD_MULT[params.period]
     rng = np.random.default_rng(seed)

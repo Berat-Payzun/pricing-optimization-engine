@@ -11,6 +11,7 @@ Upload a CSV or Excel file of past prices and quantities. The engine fits a dema
 - **Demand estimation:** linear OLS or log-log (constant elasticity) regression.
 - **Backtest:** each of the last 6 months is forecast by a model fitted only on the months before it, at the price actually charged. The headline card shows this out-of-sample error (WAPE) against a naive "same as last month" forecast, for both models, instead of the in-sample R², which flatters the fit. R² is still listed in the model details, next to an actual-vs-forecast chart.
 - **Seasonality (optional):** month-of-year effects in the demand fit, so a seasonal peak isn't mistaken for low price sensitivity. On by default with 24+ months of data.
+- **Growth trend (optional):** a linear time trend in the demand fit, so steady growth or decline isn't mistaken for a price effect. With real prices under high inflation the real price falls month after month, so without it growth makes demand look more price-sensitive than it is. Demand is then priced at the latest month's level.
 - **Today's recommendation vs the 12-month scenario:** the headline price uses today's costs and price level, with no shock. The macro scenario has its own cards and chart below the sliders, in the money of 12 months after the last sales month, so a forecast of inflation is never mistaken for a price rise to make today.
 - **Fees & taxes:** one **variable selling costs %** for everything charged as a share of the price, such as marketplace commission, card/payment fee or sales and distributor commission (charged on the customer-facing price, including VAT), a "prices include VAT" toggle with the country's standard rate prefilled (TR 20%, DE/Eurozone 19%, FR 20%, IT 22%, ES 21%, UK 20%, US/Brazil/Global 0%), and an extra per-unit cost for shipping or packaging. A **unit economics & tax breakdown** shows where each unit's price goes.
 - **Guardrails:** max change from the current price (±15% by default), minimum margin per unit, price floor and ceiling, and rounding to x.99, x.90 or whole numbers. When a rule binds, the unconstrained optimum and the limiting rule are shown next to the recommendation.
@@ -56,6 +57,10 @@ Most inflation data comes from FRED, which needs a free API key:
 3. **Streamlit Community Cloud:** open the app's ⋮ menu, then **Settings → Secrets**, and paste the same line.
 
 Without a key the app still runs: FRED series fall back to built-in values, and a data note says so. The tests never use a real key.
+
+### Deploying updates
+
+Streamlit Community Cloud pulls every push to `main` and reloads `app.py`, but modules it imports (`optimizer.py`, `macro_api.py`, …) can stay loaded in their old version. A change that touches both can then fail with errors like `TypeError: ScenarioParams.__init__() got an unexpected keyword argument`. After merging such a change, open **Manage app → ⋮ → Reboot app**.
 
 The app opens with `sample_data.csv` loaded. You can regenerate it with `python scripts/generate_sample_data.py`; its true demand is `Q/day = 120 − 2·P + 1·P_comp`. Run the tests with `pytest`.
 
@@ -106,11 +111,11 @@ To add a country, add an entry to `COUNTRY_MAP` and `FALLBACK_MACRO` in `src/con
 | Step | What happens |
 |---|---|
 | 1. Aggregation | Raw rows → calendar months (quantity summed, price quantity-weighted). Results are scaled ×1/×3/×12 for the chosen timeframe. |
-| 2. Demand fit | Linear: `Q = a + b·P (+ c·P_comp)`. Log-log: `ln Q = a + b·ln P (+ c·ln P_comp)`. Fitted on real (CPI-deflated) prices. Log-log drops zero-sales months and flags them in the UI. With seasonality on, 11 month dummies are added (January as base). The effects are re-centred to average zero, so the optimizer prices for a typical month. |
+| 2. Demand fit | Linear: `Q = a + b·P (+ c·P_comp)`. Log-log: `ln Q = a + b·ln P (+ c·ln P_comp)`. Fitted on real (CPI-deflated) prices. Log-log drops zero-sales months and flags them in the UI. With seasonality on, 11 month dummies are added (January as base). The effects are re-centred to average zero, so the optimizer prices for a typical month. With the growth trend on, a month counter `g·t` is added and the intercept is set to the last month's level (the 12-month scenario does not project the trend forward). |
 | 3. Elasticities | PED = `b·P/Q` (linear) or `b` (log-log); XED = `c·P_comp/Q` or `c`. |
 | 4. Competitor shock and reaction | Demand is re-predicted at `P_comp × (1 + shift)`. With a reaction, at each candidate price the competitor also copies part of your real price move from today's price: `P_comp × (1 + shift) × (1 + m × (P_real / P_current − 1))`, where `m` is the cut share for cuts and the rise share for rises. Matching rises makes demand look less price-sensitive (your relative price barely moves), so keep the guardrails on when you use it. |
 | 5. Capacity cap | `Q_sold = min(Q_demand × period_mult, capacity)` |
-| 6. FX shock | The imported share follows the exchange rate and US inflation: `share × (1 + fx_shift) × (1 + π_USD)` |
+| 6. FX shock | The imported share follows the exchange rate and US inflation: `share × (1 + fx_shift) × (1 + π_USD)`. `π_USD` has its own slider, prefilled with the latest US CPI; for USD countries it equals the inflation slider. |
 | 7. Inflation | The rest follows local inflation: `COGS_final = COGS × [share × (1 + fx_shift)(1 + π_USD) + (1 − share)(1 + π)] + Extra × (1 + π)`, `Fixed_final = Fixed_monthly × (1 + π) × period_mult` |
 | 8. Optimization | Profit = `(P / (1 + VAT) − f × P − COGS_final) × Q_sold − Fixed_final`, where f is the variable selling costs rate,, evaluated on a 2,000-point grid from just below unit cost to the max test price. The argmax is the optimal price P*. With price pass-through on, demand is evaluated at the real price `P / (1 + π)` and the competitor's price rises by `(1 + π)`. |
 

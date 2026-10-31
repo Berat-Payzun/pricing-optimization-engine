@@ -615,3 +615,47 @@ def test_competitor_price_at_includes_the_reaction():
     assert competitor_price_at(m, params(m), 40.5) == 50.0  # no reaction: unchanged
     reacting = params(m, comp_match_cut=0.5)
     assert competitor_price_at(m, reacting, 40.5) == pytest.approx(50.0 * (1 - 0.5 * 0.1))  # we cut 10%
+
+
+# ---------- time trend ----------
+
+def growing_agg(kind="linear", n=36, seed=1):
+    """Sales grow over time while the real price drifts down (prices lag high inflation)."""
+    rng = np.random.default_rng(seed)
+    t = np.arange(n)
+    p = 60 - 0.5 * t + rng.uniform(-4, 4, n)
+    if kind == "linear":
+        q = 1000 - 10 * p + 8 * t + rng.normal(0, 5, n)
+    else:
+        q = np.exp(9 - 1.8 * np.log(p) + 0.01 * t + rng.normal(0, 0.01, n))
+    idx = pd.date_range("2023-01-01", periods=n, freq="MS")
+    return pd.DataFrame({"Price_Charged": p, "Quantity_Sold": q, "Cost_Per_Unit": 20.0}, index=idx)
+
+
+@pytest.mark.parametrize("kind,b,g", [("linear", -10.0, 8.0), ("loglog", -1.8, 0.01)])
+def test_trend_separates_growth_from_price_sensitivity(kind, b, g):
+    agg = growing_agg(kind)
+    plain, trended = fit_demand(agg, kind), fit_demand(agg, kind, trend=True)
+    assert plain.b < b * 1.5  # growth read as price sensitivity: badly overstated
+    assert trended.b == pytest.approx(b, rel=0.1) and trended.trend == pytest.approx(g, rel=0.15)
+    assert plain.trend is None and "·t" in trended.equation()
+
+
+def test_trend_prices_at_the_latest_months_demand_level():
+    agg = growing_agg()
+    m = fit_demand(agg, "linear", trend=True)
+    expected_last = 1000 - 10 * 45.0 + 8 * 35  # true demand in the last month at a price of 45
+    assert float(m.predict(45.0)) == pytest.approx(expected_last, rel=0.03)
+    assert float(m.predict(45.0, months_ahead=1)) - float(m.predict(45.0)) == pytest.approx(m.trend)
+
+
+def test_trend_flows_into_backtest_and_bootstrap():
+    from optimizer import backtest, optimal_price_range
+
+    agg = growing_agg()
+    plain, trended = backtest(agg, "linear"), backtest(agg, "linear", trend=True)
+    assert trended.wape < plain.wape
+    m = fit_demand(agg, "linear", trend=True)
+    p = params(m, current_price=45.0, base_comp_price=None)
+    low, high = optimal_price_range(agg, "linear", p, n=60, trend=True)
+    assert low <= run_scenario(m, p).optimal["price"] <= high
