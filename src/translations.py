@@ -59,6 +59,20 @@ STRINGS: dict[str, dict[str, str]] = {
         "de": "Ergänzt das Nachfragemodell um Monatseffekte, damit saisonale Schwankungen (z. B. ein Dezember-Hoch) "
               "nicht als Preiseffekte gelten. Ab {min_n} Monaten Daten standardmäßig aktiv.",
     },
+    "trend_label": {"en": "Adjust for growth trend", "tr": "Büyüme eğilimine göre düzelt", "de": "Wachstumstrend bereinigen"},
+    "trend_help": {
+        "en": "Adds a linear time trend to the demand fit, so steady growth or decline isn't mistaken for a price "
+              "effect. Worth turning on with real prices under high inflation, where the real price falls month "
+              "after month. Demand is then priced at the latest month's level; the 12-month scenario does not "
+              "project the trend forward.",
+        "tr": "Talep modeline doğrusal bir zaman eğilimi ekler; böylece istikrarlı büyüme veya düşüş fiyat etkisi "
+              "sanılmaz. Reel fiyatlar ve yüksek enflasyonla açılması önerilir; bu durumda reel fiyat her ay düşer. "
+              "Talep son ayın düzeyinde fiyatlanır; 12 aylık senaryo eğilimi ileriye taşımaz.",
+        "de": "Ergänzt das Nachfragemodell um einen linearen Zeittrend, damit stetiges Wachstum oder ein Rückgang "
+              "nicht als Preiseffekt gilt. Empfehlenswert bei realen Preisen und hoher Inflation, wenn der reale "
+              "Preis Monat für Monat sinkt. Die Nachfrage wird dann auf dem Niveau des letzten Monats bepreist; das "
+              "12-Monats-Szenario schreibt den Trend nicht fort.",
+    },
     "sample_caption": {
         "en": "No file uploaded: using the bundled sample data.",
         "tr": "Dosya yüklenmedi: hazır örnek veri kullanılıyor.",
@@ -200,6 +214,16 @@ STRINGS: dict[str, dict[str, str]] = {
               "ödemeye razı olduğu fiyatı ve rakip fiyatını da artırır.",
         "de": "Erhöht die Fixkosten und den lokal bezogenen Anteil der Stückkosten. Bei aktivierter "
               "Preisweitergabe steigen auch die Zahlungsbereitschaft der Kunden und der Konkurrenzpreis.",
+    },
+    "shock_usd_infl": {"en": "US inflation on imported costs (%)", "tr": "İthal maliyetlerde ABD enflasyonu (%)",
+                       "de": "US-Inflation auf Importkosten (%)"},
+    "shock_usd_infl_help": {
+        "en": "The share of COGS priced in USD rises with US inflation (as well as the exchange rate). Prefilled "
+              "with the latest US CPI ({source}, {as_of}).",
+        "tr": "SMM'nin USD cinsinden kısmı ABD enflasyonuyla (ve döviz kuruyla) artar. Son ABD TÜFE değeriyle "
+              "doldurulur ({source}, {as_of}).",
+        "de": "Der in USD bepreiste Anteil der Stückkosten steigt mit der US-Inflation (und dem Wechselkurs). "
+              "Mit dem letzten US-VPI vorbelegt ({source}, {as_of}).",
     },
     "shock_fx": {"en": "Exchange rate shift (%)", "tr": "Döviz kuru değişimi (%)", "de": "Wechselkursänderung (%)"},
     "shock_fx_help": {
@@ -752,6 +776,14 @@ STRINGS: dict[str, dict[str, str]] = {
               "{month} nominal parasıyla. Fiyat kuralları uygulanmaz.",
         "de": "Profitabelster Preis, wenn die obigen Inflations-, Wechselkurs- und Konkurrenzänderungen in den "
               "nächsten 12 Monaten eintreten, in nominalem Geld von {month}. Preisregeln werden nicht angewendet.",
+    },
+    "scenario_no_rails": {
+        "en": "The scenario shows the unconstrained optimum: max change, minimum margin, floor/ceiling and price "
+              "endings apply only to today's recommendation.",
+        "tr": "Senaryo kısıtsız optimumu gösterir: en fazla değişim, minimum marj, taban/tavan fiyat ve fiyat "
+              "bitişleri yalnızca bugünkü öneriye uygulanır.",
+        "de": "Das Szenario zeigt das Optimum ohne Preisregeln: Max. Änderung, Mindestmarge, Unter-/Obergrenze und "
+              "Preisendungen gelten nur für die heutige Empfehlung.",
     },
     "scenario_profit_label": {"en": "Scenario peak profit ({per})", "tr": "Senaryo zirve kârı ({per})", "de": "Szenario-Maximalgewinn ({per})"},
     "scenario_cogs_label": {"en": "Scenario unit cost", "tr": "Senaryo birim maliyeti", "de": "Szenario-Stückkosten"},
