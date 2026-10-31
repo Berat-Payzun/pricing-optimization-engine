@@ -27,7 +27,7 @@ from optimizer import (ENDINGS, Guardrails, ScenarioParams, backtest, best_model
 from portfolio import portfolio, product_inputs
 import scenarios
 from report import Chart, Series, VLine, build_excel, build_pdf, label_rows
-from translations import LANGUAGES, Msg, localize, translate
+from translations import DECIMAL_COMMA, LANGUAGES, Msg, fmt_money, fmt_number, localize, translate
 
 SAMPLE_PATH = Path(__file__).resolve().parents[1] / "sample_data.csv"
 
@@ -123,13 +123,25 @@ def colors() -> dict:
 
 
 def money(x: float, sym: str) -> str:
-    sign = "-" if x < 0 else ""
-    return f"{sign}{sym}{abs(x):,.2f}"
+    """An amount in the UI language's style: $1,234.56 in English, 1.234,56 ₺ in Turkish and German."""
+    return fmt_money(x, sym, lang)
+
+
+def money_tpl(expr: str) -> str:
+    """A Plotly hover-template amount, e.g. money_tpl("%{y:,.0f}"). Plotly applies the separators
+    set in style(); this puts the currency symbol on the side the UI language expects."""
+    return f"{expr} {sym}" if lang in DECIMAL_COMMA else f"{sym}{expr}"
 
 
 def num(x, spec: str = ".2f", suffix: str = "") -> str:
-    """A number for display, or "—" when it can't be computed (e.g. elasticity where demand is zero)."""
-    return "—" if x is None or not np.isfinite(x) else f"{x:{spec}}{suffix}"
+    """A number for display in the UI language's style, or "—" when it can't be computed (e.g.
+    elasticity where demand is zero). Turkish writes the percent sign first (%12,5)."""
+    if x is None or not np.isfinite(x):
+        return "—"
+    text = fmt_number(x, spec, lang)
+    if suffix == "%" and lang == "tr":
+        return text[0] + "%" + text[1:] if text[:1] in "+-" else "%" + text
+    return text + suffix
 
 
 def month_year(ts) -> str:
@@ -142,6 +154,7 @@ def style(fig: go.Figure, title: str, xtitle: str, ytitle: str, height: int = 38
         height=height,
         margin=dict(l=10, r=10, t=60, b=10),
         hovermode="x unified",
+        separators=",." if lang in DECIMAL_COMMA else ".,",  # decimal, then thousands separator
         legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
         xaxis=dict(title=xtitle, showgrid=False, zeroline=False),
         yaxis=dict(title=ytitle, zeroline=False),
@@ -500,16 +513,16 @@ with metrics_area:
             else:
                 st.badge(t("badge_bt_poor", naive=naive), icon=":material/warning:", color="red")
         else:
-            st.metric(t("metric_r2"), f"{model.r2:.2f}", help=t("metric_r2_help"))
+            st.metric(t("metric_r2"), num(model.r2, ".2f"), help=t("metric_r2_help"))
             st.caption(t("caption_r2_insample"))
         if model.kind == "loglog" and model.n_dropped:
             st.badge(t("badge_periods_dropped", n_dropped=model.n_dropped, total=model.n + model.n_dropped),
                      icon=":material/warning:", color="orange")
     with c5:
-        st.metric(t("metric_cpi"), f"{infl.value:.1f}%")
+        st.metric(t("metric_cpi"), num(infl.value, ".1f", "%"))
         macro_badge(infl, t("badge_cpi"))
     with c6:
-        st.metric(t("metric_fx", currency=COUNTRY_MAP[country]["currency"]), f"{fx.value:,.4f}",
+        st.metric(t("metric_fx", currency=COUNTRY_MAP[country]["currency"]), num(fx.value, ",.4f"),
                   t("metric_fx_delta", pct=fx.change_pct) if fx.change_pct is not None and not is_usd else None,
                   delta_color="inverse")
         macro_badge(fx, t("badge_fx"))
@@ -540,10 +553,10 @@ with metrics_area, st.expander(t("breakdown_expander")):
         breakdown_table = pd.DataFrame({
             t("col_item"): labels,
             t("col_per_unit"): [money(v, sym) for v in values],
-            t("col_share"): [f"{v / rec.price * 100:.1f}%" for v in values],
+            t("col_share"): [num(v / rec.price * 100, ".1f", "%") for v in values],
         })
         st.dataframe(breakdown_table, hide_index=True, width="stretch")
-        st.caption(t("breakdown_caption", units=f"{rec_row['q_sold']:,.0f}", per=per,
+        st.caption(t("breakdown_caption", units=num(rec_row['q_sold'], ",.0f"), per=per,
                      contribution=money(unit_margin * rec_row["q_sold"], sym), fixed=money(today.fixed_final, sym),
                      profit=money(rec_row["profit"], sym)))
 
@@ -562,8 +575,8 @@ with metrics_area, st.expander(t("sens_expander"), icon=":material/tune:"):
                 y=names, x=(sens[f"price_{side}"] - base_price).to_numpy()[::-1], orientation="h",
                 name=t(f"sens_{side}"), marker_color=color,
                 customdata=np.stack([sens[f"price_{side}"], sens[f"profit_{side}"]], axis=1)[::-1],
-                hovertemplate=sym + "%{customdata[0]:,.2f} · " + t("sens_profit") + " " + sym
-                + "%{customdata[1]:,.0f}<extra></extra>"))
+                hovertemplate=money_tpl("%{customdata[0]:,.2f}") + " · " + t("sens_profit") + " "
+                + money_tpl("%{customdata[1]:,.0f}") + "<extra></extra>"))
         style(fig, t("sens_title", price=money(base_price, sym)), t("sens_axis", sym=sym), "", height=300)
         fig.update_layout(barmode="overlay")
         fig.add_vline(x=0, line=dict(color=col["muted"], width=1))
@@ -611,9 +624,9 @@ with charts_area:
     if price_range:
         fig.add_vrect(x0=price_range[0], x1=price_range[1], fillcolor=col["range"], line_width=0,
                       annotation_text=t("chart_range"), annotation_position="bottom left")
-    fig.add_trace(go.Scatter(x=curve["price"], y=curve["profit"], name=t("chart_net_profit"), line=dict(color=col["s1"], width=3)))
-    fig.add_trace(go.Scatter(x=curve["price"], y=curve["revenue"], name=t("chart_revenue"), line=dict(color=col["s2"], width=1.5)))
-    fig.add_trace(go.Scatter(x=curve["price"], y=curve["total_cost"], name=t("chart_total_cost"), line=dict(color=col["s3"], width=1.5)))
+    fig.add_trace(go.Scatter(x=curve["price"], y=curve["profit"], mode="lines", name=t("chart_net_profit"), line=dict(color=col["s1"], width=3)))
+    fig.add_trace(go.Scatter(x=curve["price"], y=curve["revenue"], mode="lines", name=t("chart_revenue"), line=dict(color=col["s2"], width=1.5)))
+    fig.add_trace(go.Scatter(x=curve["price"], y=curve["total_cost"], mode="lines", name=t("chart_total_cost"), line=dict(color=col["s3"], width=1.5)))
     fig.add_hline(y=0, line=dict(color=col["muted"], width=1))
     markers.append(dict(x=rec.price, text=t("chart_recommended", price=money(rec.price, sym)), color=col["s1"]))
     if abs(rec.price - unconstrained) >= 0.005:
@@ -629,7 +642,7 @@ with charts_area:
         fig.add_trace(go.Scatter(x=[be], y=[0], mode="markers", showlegend=False, hoverinfo="skip",
                                  marker=dict(color=col["muted"], size=9, symbol="diamond")))
     style(fig, t("chart_main_title", per=per), t("axis_price", sym=sym), f"{sym} {per}", height=460)
-    fig.update_traces(hovertemplate=f"{sym}%{{y:,.0f}}", selector=dict(mode="lines"))
+    fig.update_traces(hovertemplate=money_tpl("%{y:,.0f}"), selector=dict(mode="lines"))
     st.plotly_chart(fig, width="stretch")
     if today.break_evens:
         st.caption(t("caption_break_even", prices=", ".join(money(b, sym) for b in today.break_evens),
@@ -643,12 +656,12 @@ with charts_area:
         fig.add_trace(go.Scatter(x=fit_months[price_col], y=fit_months["Quantity_Sold"] * PERIOD_MULT[timeframe],
                                  mode="markers", name=t("chart_observed"),
                                  marker=dict(color=col["s2"], size=9, line=dict(color="white", width=1)),
-                                 hovertemplate=f"{sym}%{{x:,.2f}} → %{{y:,.0f}} {units}<extra></extra>"))
+                                 hovertemplate=money_tpl("%{x:,.2f}") + f" → %{{y:,.0f}} {units}<extra></extra>"))
         if not out_months.empty:
             fig.add_trace(go.Scatter(x=out_months[price_col], y=out_months["Quantity_Sold"] * PERIOD_MULT[timeframe],
                                      mode="markers", name=t("chart_excluded"),
                                      marker=dict(color="rgba(0,0,0,0)", size=9, line=dict(color=col["muted"], width=1.5)),
-                                     hovertemplate=f"{sym}%{{x:,.2f}} → %{{y:,.0f}} {units}<extra></extra>"))
+                                     hovertemplate=money_tpl("%{x:,.2f}") + f" → %{{y:,.0f}} {units}<extra></extra>"))
         # Fitted demand in today's money (no shock), comparable with the observed real prices
         fig.add_trace(go.Scatter(x=today.curve["price"], y=today.curve["q_demand"], name=t("chart_fitted"), line=dict(color=col["s1"], width=2),
                                  hovertemplate=f"%{{y:,.0f}} {units}<extra></extra>"))
@@ -665,7 +678,7 @@ with charts_area:
             fig.add_trace(go.Scatter(x=agg.index, y=agg["Real_Price"], name=t("chart_real_price"),
                                      line=dict(color=col["s3"], width=2, dash="dot")))
         style(fig, t("chart_history_title"), "", t("axis_price", sym=sym))
-        fig.update_traces(hovertemplate=f"{sym}%{{y:,.2f}}")
+        fig.update_traces(hovertemplate=money_tpl("%{y:,.2f}"))
         st.plotly_chart(fig, width="stretch")
 
 # ---------- scenario results (below the sliders) ----------
@@ -688,7 +701,7 @@ fig.add_trace(go.Scatter(x=result.curve["price"], y=result.curve["profit"], name
                          line=dict(color=col["s1"], width=2.5)))
 fig.add_hline(y=0, line=dict(color=col["muted"], width=1))
 style(fig, t("chart_shock_title", per=per), t("axis_price", sym=sym), f"{sym} {per}")
-fig.update_traces(hovertemplate=f"{sym}%{{y:,.0f}}")
+fig.update_traces(hovertemplate=money_tpl("%{y:,.0f}"))
 st.plotly_chart(fig, width="stretch")
 st.caption(t("caption_shock", d_price=money(opt["price"] - unconstrained, sym),
              d_profit=money(opt["profit"] - today.optimal["profit"], sym), per=per))
@@ -709,19 +722,19 @@ tradeoff = step_tradeoff(model, today_params, unconstrained, noise_month, rails,
                          TEST_STEP_CHOICES + (test_step / 100,))
 with tp1:
     needed = plan.weeks_needed
-    st.metric(t("test_weeks_metric"), f"{needed:,.0f}" if np.isfinite(needed) else "∞",
+    st.metric(t("test_weeks_metric"), num(needed, ",.0f") if np.isfinite(needed) else "∞",
               help=t("test_weeks_help", max_weeks=TEST_MAX_WEEKS))
-    st.caption(t("test_noise_caption", sd=f"{plan.sd_week:,.0f}", diff=f"{abs(plan.diff):,.0f}", units=units))
+    st.caption(t("test_noise_caption", sd=num(plan.sd_week, ",.0f"), diff=num(abs(plan.diff), ",.0f"), units=units))
 with tp2:
     # Weeks fall roughly with the square of the step: a bigger step stands out from weekly noise sooner
     shown = tradeoff[np.isfinite(tradeoff["weeks_needed"])]
     fig = go.Figure(go.Bar(
-        x=[f"{s_ * 100:g}%" for s_ in shown["step"]], y=shown["weeks_needed"],
+        x=[num(s_ * 100, "g", "%") for s_ in shown["step"]], y=shown["weeks_needed"],
         marker_color=[col["s1"] if abs(s_ - test_step / 100) < 1e-9 else
                       (col["s3"] if w_ <= TEST_MAX_WEEKS else col["muted"])
                       for s_, w_ in zip(shown["step"], shown["weeks_needed"])],
-        text=[f"{w_:,.0f}" for w_ in shown["weeks_needed"]], textposition="outside",
-        customdata=shown["test_price"], hovertemplate=f"{sym}%{{customdata:,.2f}}: %{{y:,.0f}}<extra></extra>"))
+        text=[num(w_, ",.0f") for w_ in shown["weeks_needed"]], textposition="outside",
+        customdata=shown["test_price"], hovertemplate=money_tpl("%{customdata:,.2f}") + ": %{y:,.0f}<extra></extra>"))
     fig.add_hline(y=TEST_MAX_WEEKS, line=dict(color=col["muted"], width=1, dash="dash"),
                   annotation_text=t("test_chart_max", weeks=TEST_MAX_WEEKS), annotation_position="top right")
     style(fig, t("test_chart_title"), t("test_chart_x"), t("test_chart_y"), height=300)
@@ -730,8 +743,8 @@ with tp2:
     st.plotly_chart(fig, width="stretch")
     st.caption(t("test_chart_caption"))
 st.markdown(t("test_summary", weeks=plan.weeks, half=plan.weeks // 2, test=money(plan.test_price, sym),
-              current=money(current_price, sym), exp_test=f"{plan.expected_test:,.0f}",
-              exp_current=f"{plan.expected_current:,.0f}", units=units))
+              current=money(current_price, sym), exp_test=num(plan.expected_test, ",.0f"),
+              exp_current=num(plan.expected_current, ",.0f"), units=units))
 for w in plan.warnings:
     st.warning(localize(w, lang), icon=":material/warning:")
 plan_columns = {"week": t("col_week"), "arm": t("col_arm"), "price": t("col_price"), "expected": t("col_expected"),
@@ -758,9 +771,9 @@ test_result = evaluate_test(plan, edited[t("col_actual")])
 if test_result is None:
     st.caption(t("test_need_more"))
 else:
-    text = t(f"test_verdict_{test_result.code}", observed=f"{test_result.observed_diff:+,.0f}",
-             expected=f"{plan.diff:+,.0f}", low=f"{test_result.ci[0]:+,.0f}", high=f"{test_result.ci[1]:+,.0f}",
-             e_obs=f"{test_result.elasticity_observed:.2f}", e_model=f"{test_result.elasticity_model:.2f}")
+    text = t(f"test_verdict_{test_result.code}", observed=num(test_result.observed_diff, "+,.0f"),
+             expected=num(plan.diff, "+,.0f"), low=num(test_result.ci[0], "+,.0f"), high=num(test_result.ci[1], "+,.0f"),
+             e_obs=num(test_result.elasticity_observed, ".2f"), e_model=num(test_result.elasticity_model, ".2f"))
     (st.success if test_result.code == "consistent" else st.warning)(text)
     if abs(test_result.level_ratio - 1) > 0.2:
         st.info(t("test_level_shift", pct=(test_result.level_ratio - 1) * 100))
@@ -835,7 +848,7 @@ summary = ([(t("product_label"), product)] if product else []) + [
      if boot is not None and boot.ped is not None else "—"),
     (t("metric_backtest"), t("sum_backtest_value", wape=bt.wape * 100, naive=bt.naive_wape * 100, n=len(bt.months))
      if bt is not None and np.isfinite(bt.wape) and np.isfinite(bt.naive_wape) else "—"),
-    (t("metric_r2"), f"{model.r2:.2f}"),
+    (t("metric_r2"), num(model.r2, ".2f")),
     (t("sum_guardrails"), t("sum_guardrails_value", max_change=max_change, min_margin=min_margin,
                             floor=money(price_floor, sym) if price_floor else "—",
                             ceiling=money(price_ceiling, sym) if price_ceiling else "—",
@@ -845,24 +858,24 @@ summary = ([(t("product_label"), product)] if product else []) + [
     (t("reaction_header"), t("sum_reaction_value", cut=match_cut, rise=match_rise)
      + (f" · {t('caption_no_reaction', price=money(no_reaction.price, sym))}" if no_reaction else "")),
     (t("sum_per_unit"), f"{per_unit} · {t('breakdown_margin')} {money(unit_margin, sym)} "
-                        f"({unit_margin / rec.price * 100:.1f}%)"),
+                        f"({num(unit_margin / rec.price * 100, '.1f', '%')})"),
     (t("sum_unit_cost"), money(today.cogs_final, sym)),
     (t("sum_fixed", per=per), money(today.fixed_final, sym)),
     (t("sum_break_even"), ", ".join(money(b, sym) for b in today.break_evens) or t("sum_none")),
     (t("sum_equation"), model.equation()),
     (t("sum_test_plan"), t("sum_test_plan_value", test=money(plan.test_price, sym), weeks=plan.weeks,
-                           diff=f"{plan.diff:+,.0f}")),
+                           diff=num(plan.diff, "+,.0f"))),
     (t("sum_scenario"), scenario_month),
-    (t("shock_infl"), f"{inflation:.1f}%"),
-    (t("shock_usd_infl"), "—" if is_usd else f"{usd_infl_pct:.1f}%"),
-    (t("shock_fx"), "—" if is_usd else f"{fx_shift:+.1f}%"),
-    (t("shock_comp"), f"{comp_shift:+.0f}%" if model.has_comp else "—"),
+    (t("shock_infl"), num(inflation, ".1f", "%")),
+    (t("shock_usd_infl"), "—" if is_usd else num(usd_infl_pct, ".1f", "%")),
+    (t("shock_fx"), "—" if is_usd else num(fx_shift, "+.1f", "%")),
+    (t("shock_comp"), num(comp_shift, "+.0f", "%") if model.has_comp else "—"),
     (t("shock_passthrough"), on_off(passthrough)),
     (t("scenario_opt_label", month=scenario_month), money(opt["price"], sym)),
     (t("scenario_profit_label", per=per), money(opt["profit"], sym)),
     (t("scenario_cogs_label"), money(result.cogs_final, sym)),
-    (t("metric_cpi"), f"{infl.value:.1f}% ({infl.source}, {infl.as_of or '—'})"),
-    (t("metric_fx", currency=COUNTRY_MAP[country]["currency"]), f"{fx.value:,.4f} ({fx.source})"),
+    (t("metric_cpi"), f"{num(infl.value, '.1f', '%')} ({infl.source}, {infl.as_of or '—'})"),
+    (t("metric_fx", currency=COUNTRY_MAP[country]["currency"]), f"{num(fx.value, ',.4f')} ({fx.source})"),
 ]
 curve_columns = {
     "price": t("col_price"), "q_demand": t("col_q_demand"), "q_sold": t("col_q_sold"), "revenue": t("chart_revenue"),

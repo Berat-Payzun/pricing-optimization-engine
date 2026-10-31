@@ -1326,13 +1326,55 @@ STRINGS: dict[str, dict[str, str]] = {
 }
 
 
+DECIMAL_COMMA = {"tr", "de"}  # languages that write 1.234,56 instead of 1,234.56
+_SWAP = str.maketrans(",.", ".,")
+
+
+def fmt_number(x: float, spec: str, lang: str) -> str:
+    """`format(x, spec)` with the separators of `lang` (1.234,56 in Turkish and German)."""
+    text = format(x, spec)
+    return text.translate(_SWAP) if lang in DECIMAL_COMMA else text
+
+
+def fmt_money(x: float, sym: str, lang: str, decimals: int = 2) -> str:
+    """An amount with its currency symbol: $1,234.56 in English, 1.234,56 ₺ in Turkish and German.
+    No minus sign on an amount that rounds to zero."""
+    amount = fmt_number(abs(x), f",.{decimals}f", lang)
+    sign = "-" if x < 0 and round(abs(x), decimals) > 0 else ""
+    return f"{sign}{amount} {sym}" if lang in DECIMAL_COMMA else f"{sign}{sym}{amount}"
+
+
+class _LocalFloat(float):
+    """A float that formats with a language's separators inside str.format (see translate)."""
+    lang = "en"
+
+    def __format__(self, spec: str) -> str:
+        return fmt_number(float(self), spec, self.lang)
+
+
+class _LocalInt(int):
+    lang = "en"
+
+    def __format__(self, spec: str) -> str:
+        return fmt_number(int(self), spec, self.lang)
+
+
+def _localized(value, lang: str):
+    if lang not in DECIMAL_COMMA or isinstance(value, bool) or not isinstance(value, (int, float)):
+        return value
+    out = (_LocalFloat if isinstance(value, float) else _LocalInt)(value)
+    out.lang = lang
+    return out
+
+
 def translate(key: str, lang: str = "en", **params) -> str:
-    """Render `key` in `lang`, falling back to English, then to the key itself."""
+    """Render `key` in `lang`, falling back to English, then to the key itself. Numbers in the
+    text use the language's separators."""
     entry = STRINGS.get(key)
     if entry is None:
         return key
     text = entry.get(lang) or entry["en"]
-    return text.format(**params) if params else text
+    return text.format(**{k: _localized(v, lang) for k, v in params.items()}) if params else text
 
 
 class Msg(str):

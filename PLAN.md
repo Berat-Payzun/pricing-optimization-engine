@@ -106,9 +106,9 @@ were fixed in PR #7.
 - [x] 2. Bottom-edge optimum is not an optimum
 - [x] 3. Data cleaning: non-finite values, all-zero sales
 - [x] 4. Auto skips upward-sloping demand
-- [ ] 5. Minor fixes
+- [x] 5. Minor fixes
 - [ ] 6a. README showcase
-- [ ] 6b. Locale-aware numbers
+- [x] 6b. Locale-aware numbers
 - [ ] 6c. Ruff lint in CI
 
 ## Plan

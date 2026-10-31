@@ -95,3 +95,23 @@ def test_keys_built_at_runtime_exist():
     keys = {f"sens_factor_{f}" for f in SENSITIVITY_FACTORS} | {"sens_low", "sens_high", "model_auto"}
     keys |= {f"badge_conf_{c}" for c in ("high", "medium", "low")}
     assert keys - set(STRINGS) == set()
+
+
+def test_numbers_and_money_follow_the_language():
+    from translations import fmt_money, fmt_number
+
+    assert fmt_number(1234567.891, ",.2f", "en") == "1,234,567.89"
+    assert fmt_number(1234567.891, ",.2f", "tr") == fmt_number(1234567.891, ",.2f", "de") == "1.234.567,89"
+    assert fmt_money(593913.14, "₺", "tr") == "593.913,14 ₺"
+    assert fmt_money(49492.76, "R$", "en") == "R$49,492.76"
+    assert fmt_money(-12.5, "€", "de") == "-12,50 €"
+    assert fmt_money(-0.001, "$", "en") == "$0.00"  # rounds to zero: no minus sign
+    for sym in ("$", "€", "£", "₺", "R$"):
+        assert fmt_money(1000, sym, "en").startswith(sym) and fmt_money(1000, sym, "tr").endswith(" " + sym)
+
+
+def test_message_numbers_use_the_language_separators():
+    assert "(1.234,50–56.789,00)" in translate("warn_extrapolated", "de", p_min=1234.5, p_max=56789.0)
+    assert "(1,234.50–56,789.00)" in translate("warn_extrapolated", "en", p_min=1234.5, p_max=56789.0)
+    assert "%90,0" in translate("warn_fees_exceed_price", "tr", fees=90.0, net=83.3)
+    assert "Yalnızca 2 aylık" in translate("err_too_few_months", "tr", n=2, min_n=3)  # plain ints unchanged
