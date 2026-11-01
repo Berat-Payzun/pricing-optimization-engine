@@ -80,25 +80,26 @@ DECIMAL_COMMA = r"-?(\d{1,3}(\.\d{3})+|\d+),\d+"
 THOUSANDS_COMMA = r"-?\d{1,3}(,\d{3})+(\.\d+)?"  # US style: 1,234 or 1,234.56
 AMBIGUOUS_COMMA = r"-?\d{1,3},\d{3}"  # 1,250 is 1250 in the US and 1.25 in Turkey or Germany
 ISO_DATE = r"\d{4}-\d{1,2}-\d{1,2}"
+# A UTC offset after a time ("2024-02-05T10:00:00+01:00", "...Z"): dropped, keeping the local time
+# of the sale, so every date lands in one time-zone-free column
+UTC_OFFSET = r"^(.*\d:\d{2}(?::\d{2}(?:\.\d+)?)?)\s*(?:Z|UTC|[+-]\d{2}(?::?\d{2})?)$"
 # dd.mm.yyyy, dd/mm/yy, mm/dd/yyyy, dd-mm-yyyy ...: first field, separator, second field, year, rest (a time)
 NUMERIC_DATE = r"^(\d{1,2})([./-])(\d{1,2})\2(\d{4}|\d{2})(?!\d)(.*)$"
 
 XLSX_MAGIC = b"PK\x03\x04"  # .xlsx files are zip archives
+# What kind of file read_table read; it sets how "1,250" is read when nothing else settles it
+CSV_COMMA, CSV_OTHER, XLSX = "csv_comma", "csv_other", "xlsx"
 
 
-def read_table(source) -> tuple[pd.DataFrame, bool]:
+def read_table(source) -> tuple[pd.DataFrame, str]:
     """Read a CSV or .xlsx file (path, bytes buffer or text buffer) with every column as text.
-    Returns (frame, default_decimal_comma): how to read a value like "1,250" when neither the
-    data nor the caller settles it (see decimal_comma)."""
+    Returns (frame, kind): CSV_COMMA, CSV_OTHER (";" or tab separated) or XLSX."""
     data = Path(source).read_bytes() if isinstance(source, (str, Path)) else source.read()
     if isinstance(data, bytes) and data.startswith(XLSX_MAGIC):
-        # Excel number cells come through as "10.5"; a comma can only be in text typed in a cell
-        return pd.read_excel(io.BytesIO(data), sheet_name=0, dtype=str), False
+        return pd.read_excel(io.BytesIO(data), sheet_name=0, dtype=str), XLSX
     text = data if isinstance(data, str) else decode(data)
     sep = detect_separator(text)
-    # With "," as the separator a comma inside a value is usually a thousands separator (US quoted
-    # "1,234"); ";" and tab separated files mostly come from decimal-comma locales.
-    return pd.read_csv(io.StringIO(text), sep=sep, dtype=str), sep != ","
+    return pd.read_csv(io.StringIO(text), sep=sep, dtype=str), CSV_COMMA if sep == "," else CSV_OTHER
 
 
 def decode(data: bytes) -> str:
@@ -117,8 +118,8 @@ def detect_separator(text: str) -> str:
 
 
 def _comma_kinds(s: pd.Series) -> tuple[pd.Series, pd.Series, pd.Series]:
-    """Masks of values that can only be a decimal comma (1.234,56; 12,5), only a thousands comma
-    (1,234.56; 1,234,567), and values that could be either (1,250)."""
+    """Masks of (stripped text) values that can only be a decimal comma (1.234,56; 12,5), only a
+    thousands comma (1,234.56; 1,234,567), and values that could be either (1,250)."""
     def match(pattern):
         return s.str.fullmatch(pattern).fillna(False).astype(bool)
 
@@ -126,39 +127,55 @@ def _comma_kinds(s: pd.Series) -> tuple[pd.Series, pd.Series, pd.Series]:
     return match(DECIMAL_COMMA) & ~ambiguous, match(THOUSANDS_COMMA) & ~ambiguous, ambiguous
 
 
-def resolve_decimal_comma(frame: pd.DataFrame, hint: bool | None, default: bool) -> tuple[bool, bool]:
-    """How to read ambiguous values like "1,250" in these (numeric) columns: by the format most of
-    the unambiguous values use, else by `hint` (the user's file format or country), else by
-    `default` (from read_table). Returns (decimal_comma, hint_decided), where hint_decided says the
-    hint settled values that are really in the file."""
-    cells = frame.stack().astype("string").str.strip()
-    decimal, thousands, ambiguous = _comma_kinds(cells)
-    n_dec, n_thou = int(decimal.sum()), int(thousands.sum())
+def resolve_decimal_comma(kinds: list[tuple[pd.Series, pd.Series, pd.Series]], hint: bool | None,
+                          explicit: bool, file_kind: str) -> tuple[bool, bool]:
+    """How to read ambiguous values like "1,250", from the _comma_kinds masks of the numeric columns:
+    1. the format most of the unambiguous values use;
+    2. an `explicit` hint (a file format the user picked);
+    3. a comma-separated CSV: thousands comma (a decimal comma there would split the value, so
+       commas inside values are US quoting like "1,234"; Turkish/German Excel uses ";");
+    4. the hint (the country's convention);
+    5. ";" or tab separated CSV: decimal comma; .xlsx: decimal point.
+    Returns (decimal_comma, hint_decided), hint_decided meaning step 4 settled values in the file."""
+    n_dec = sum(int(d.sum()) for d, _, _ in kinds)
+    n_thou = sum(int(t.sum()) for _, t, _ in kinds)
     if n_dec or n_thou:
         return n_dec > n_thou, False
+    if hint is not None and explicit:
+        return hint, False
+    if file_kind == CSV_COMMA:
+        return False, False
     if hint is not None:
-        return hint, bool(ambiguous.any())
-    return default, False
+        return hint, any(bool(a.any()) for _, _, a in kinds)
+    return file_kind == CSV_OTHER, False
 
 
-def to_number(values: pd.Series, decimal_comma: bool) -> pd.Series:
+def to_number(values: pd.Series, decimal_comma: bool, kinds=None) -> pd.Series:
     """Text to numbers. A value that can only be read one way is read that way; `decimal_comma`
-    decides only the ambiguous ones, so a file mixing 1,234.50 and 12,5 keeps both."""
+    decides only the ambiguous ones, so a file mixing 1,234.50 and 12,5 keeps both. `kinds`: the
+    column's _comma_kinds masks, when already computed."""
     s = values.astype("string").str.strip()
-    decimal, thousands, ambiguous = _comma_kinds(s)
-    decimal |= ambiguous & decimal_comma
-    thousands |= ambiguous & (not decimal_comma)
+    decimal, thousands, ambiguous = kinds if kinds is not None else _comma_kinds(s)
+    decimal = decimal | (ambiguous & decimal_comma)
+    thousands = thousands | (ambiguous & (not decimal_comma))
     s = s.where(~decimal, s.str.replace(".", "", regex=False).str.replace(",", ".", regex=False))
     s = s.where(~thousands, s.str.replace(",", "", regex=False))
     return pd.to_numeric(s, errors="coerce").astype("float64")  # plain floats, not nullable Float64
 
 
-def date_order(values: pd.Series, hint: bool | None) -> tuple[bool, bool]:
-    """Whether numeric dates like 05/02/2024 are day first. The data decides when any value settles
-    it (a first field above 12: day first; a second field above 12: month first), dotted dates are
-    always day first, and otherwise `hint` (the user's file format or country) decides, else month
-    first. Returns (dayfirst, hint_decided)."""
-    parts = values.astype("string").str.strip().str.extract(NUMERIC_DATE).dropna(subset=[0])
+def date_parts(values: pd.Series) -> tuple[pd.Series, pd.DataFrame]:
+    """(stripped text, NUMERIC_DATE fields per value), shared by date_order and to_dates."""
+    s = values.astype("string").str.strip()
+    return s, s.str.extract(NUMERIC_DATE)
+
+
+def date_order(parts: pd.DataFrame, hint: bool | None, explicit: bool = False) -> tuple[bool, bool]:
+    """Whether numeric dates like 05/02/2024 are day first, from date_parts' fields. The data decides
+    when any value settles it (a first field above 12: day first; a second field above 12: month
+    first), dotted dates are always day first, and otherwise `hint` (the user's file format or the
+    country) decides, else month first. Returns (dayfirst, hint_decided); hint_decided is never set
+    for an `explicit` hint, which the user chose knowingly."""
+    parts = parts.dropna(subset=[0])
     if parts.empty:
         return False, False
     first, second = parts[0].astype(int), parts[2].astype(int)
@@ -168,42 +185,56 @@ def date_order(values: pd.Series, hint: bool | None) -> tuple[bool, bool]:
         return False, False
     if (parts[1] == ".").any():
         return True, False
-    return (hint, True) if hint is not None else (False, False)
+    return (hint, not explicit) if hint is not None else (False, False)
 
 
-def to_dates(values: pd.Series, dayfirst: bool = False) -> pd.Series:
+def _parse(text: pd.Series) -> pd.Series:
+    """ISO-style text (year first) to time-zone-free timestamps: ISO 8601 where it fits, else
+    pandas' per-value guess, which also reads times like "1:30 PM"."""
+    text = text.str.replace(UTC_OFFSET, r"\1", regex=True)
+    out = pd.to_datetime(text, format="ISO8601", errors="coerce")
+    bad = out.isna() & text.notna()
+    if bad.any():
+        out = out.astype("datetime64[ns]")
+        out[bad] = pd.to_datetime(text[bad], format="mixed", errors="coerce")
+    return out
+
+
+def to_dates(values: pd.Series, dayfirst: bool = False, parts: pd.DataFrame | None = None) -> pd.Series:
     """Parse dates value by value, so a column mixing ISO (2024-02-05) and numeric (05/02/24) dates
     reads both: ISO as year-month-day, numeric dates in the `dayfirst` order (a 2-digit year is
-    20yy), anything else ("Feb 5, 2024") by pandas' own guess."""
-    s = values.astype("string").str.strip()
+    20yy), anything else ("Feb 5, 2024") by pandas' own guess. A time after the date is kept
+    (also "1:30 PM"); a UTC offset is dropped, keeping the local time. `parts`: from date_parts."""
+    s, parts = date_parts(values) if parts is None else (values.astype("string").str.strip(), parts)
     out = pd.Series(pd.NaT, index=s.index, dtype="datetime64[ns]")
     iso = s.str.match(ISO_DATE).fillna(False).astype(bool)
-    parts = s.str.extract(NUMERIC_DATE)
     numeric = parts[0].notna() & ~iso
     other = s.notna() & ~iso & ~numeric
     if iso.any():
-        out[iso] = pd.to_datetime(s[iso], format="ISO8601", errors="coerce")
+        out[iso] = _parse(s[iso])
     if numeric.any():
         p = parts[numeric]
         day, month = (p[0], p[2]) if dayfirst else (p[2], p[0])
         year = p[3].where(p[3].str.len() == 4, "20" + p[3])
-        text = year + "-" + month.str.zfill(2) + "-" + day.str.zfill(2) + p[4].fillna("")
-        out[numeric] = pd.to_datetime(text, format="ISO8601", errors="coerce")
+        out[numeric] = _parse(year + "-" + month.str.zfill(2) + "-" + day.str.zfill(2) + p[4].fillna(""))
     if other.any():
-        out[other] = pd.to_datetime(s[other], format="mixed", errors="coerce")
+        out[other] = pd.to_datetime(s[other].str.replace(UTC_OFFSET, r"\1", regex=True), format="mixed",
+                                    errors="coerce")
     return out
 
 
 def load_csv(source, default_cogs: float, drop_duplicates: bool = True, dayfirst: bool | None = None,
-             decimal_comma: bool | None = None) -> tuple[pd.DataFrame, list[str]]:
+             decimal_comma: bool | None = None, explicit: bool = False) -> tuple[pd.DataFrame, list[str]]:
     """Read and clean raw sales rows from a CSV or .xlsx file. Returns (clean_df, warnings).
 
     Exact duplicate rows usually come from combining overlapping exports and would double
     the sales; `drop_duplicates=False` keeps them for transaction logs where they can be real.
-    `dayfirst` and `decimal_comma` say how to read dates like 05/02/2024 and numbers like
-    1,250 when the data itself leaves them ambiguous (None: month first, and the file type's default)."""
+    `dayfirst` and `decimal_comma` say how to read dates like 05/02/2024 and numbers like 1,250
+    when the data itself leaves them ambiguous (None: month first, and the file type's default).
+    `explicit` says the user picked them as the file's format: they then also override a
+    comma-separated file's thousands comma, and no "read as ..." warning is added."""
     warnings: list[str] = []
-    raw, default_comma = read_table(source)
+    raw, file_kind = read_table(source)
     df = normalize_columns(raw)
     flag_header = next((c for c in raw.columns if ALIAS_LOOKUP.get(fold_header(c)) == FLAG), None)
 
@@ -212,16 +243,19 @@ def load_csv(source, default_cogs: float, drop_duplicates: bool = True, dayfirst
         raise DataValidationError(Msg("err_missing_cols", cols=", ".join(missing)))
 
     df = df[[c for c in REQUIRED + OPTIONAL + [PRODUCT, FLAG] if c in df.columns]].copy()
-    order, by_hint = date_order(df["Date"], dayfirst)
+    _, parts = date_parts(df["Date"])
+    order, by_hint = date_order(parts, dayfirst, explicit)
     if by_hint:
         warnings.append(Msg("warn_dates_dmy") if order else Msg("warn_dates_mdy"))
-    df["Date"] = to_dates(df["Date"], order)
+    df["Date"] = to_dates(df["Date"], order, parts)
     numeric = list(df.columns.drop(["Date", PRODUCT, FLAG], errors="ignore"))
-    comma, by_hint = resolve_decimal_comma(df[numeric], decimal_comma, default_comma)
+    text = {col: df[col].astype("string").str.strip() for col in numeric}
+    kinds = {col: _comma_kinds(s) for col, s in text.items()}
+    comma, by_hint = resolve_decimal_comma(list(kinds.values()), decimal_comma, explicit, file_kind)
     if by_hint:
         warnings.append(Msg("warn_numbers_comma") if comma else Msg("warn_numbers_point"))
     for col in numeric:
-        number = to_number(df[col], comma)
+        number = to_number(text[col], comma, kinds[col])
         # "inf" parses as a number, and 1e308 overflows the monthly sums: neither is a real price or
         # quantity, so both count as missing (rows missing a required value are dropped and counted)
         df[col] = number.where(np.isfinite(number) & (number.abs() < MAX_VALUE))

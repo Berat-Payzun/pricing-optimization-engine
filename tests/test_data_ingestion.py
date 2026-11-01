@@ -419,3 +419,38 @@ def test_sale_marks_a_promo_in_a_flag_column():
     flags, warnings = flags_of("Flag", ["Sale", "promo", "weird"])
     assert flags == ["promo", "promo", ""]
     assert any(w.key == "warn_flag_unknown" and w.params == {"values": "weird"} for w in warnings)
+
+
+def test_numeric_dates_keep_12_hour_times():
+    dates, _ = dates_of(["05/02/2024 1:30 PM", "06/02/2024 2:00 AM"], dayfirst=True)
+    assert dates == ["2024-02-05", "2024-02-06"]
+    df, _ = load_csv(csv("Date,Price,Qty\n05/02/2024 1:30 PM,10,5"), default_cogs=1, dayfirst=True)
+    assert df["Date"].iloc[0] == pd.Timestamp("2024-02-05 13:30")
+
+
+def test_dates_with_a_utc_offset_keep_their_local_time():
+    data = "Date,Price,Qty\n2024-02-05T10:00:00+01:00,10,5\n2024-02-06T23:30:00Z,11,5\n2024-02-07,12,5"
+    df, _ = load_csv(csv(data), default_cogs=1)
+    assert df["Date"].tolist() == [pd.Timestamp("2024-02-05 10:00"), pd.Timestamp("2024-02-06 23:30"),
+                                   pd.Timestamp("2024-02-07")]
+    assert df["Date"].dt.tz is None
+
+
+def test_comma_separated_file_keeps_thousands_commas_unless_a_format_is_chosen():
+    data = 'Date,Price_Charged,Quantity_Sold\n2024-01-01,19.99,"1,250"'
+    # A German country convention doesn't turn a US comma-separated export's 1,250 into 1.25
+    df, warnings = load_csv(csv(data), default_cogs=1, dayfirst=True, decimal_comma=True)
+    assert df["Quantity_Sold"].tolist() == [1250.0]
+    assert not any(getattr(w, "key", None) in ("warn_numbers_comma", "warn_numbers_point") for w in warnings)
+    # ...but a file format the user picked does
+    df, _ = load_csv(csv(data), default_cogs=1, dayfirst=True, decimal_comma=True, explicit=True)
+    assert df["Quantity_Sold"].tolist() == [1.25]
+
+
+def test_an_explicit_format_adds_no_ambiguity_warnings():
+    data = "Date\tPrice_Charged\tQuantity_Sold\n05/01/2024\t10\t1,250\n05/02/2024\t11\t1,250"
+    keys = {"warn_dates_dmy", "warn_dates_mdy", "warn_numbers_comma", "warn_numbers_point"}
+    _, auto = load_csv(io.StringIO(data), 1, False, dayfirst=True, decimal_comma=True)
+    _, chosen = load_csv(io.StringIO(data), 1, False, dayfirst=True, decimal_comma=True, explicit=True)
+    assert {getattr(w, "key", None) for w in auto} & keys == {"warn_dates_dmy", "warn_numbers_comma"}
+    assert not {getattr(w, "key", None) for w in chosen} & keys

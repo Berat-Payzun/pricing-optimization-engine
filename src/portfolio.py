@@ -89,9 +89,10 @@ def price_products(fits: dict[str, ProductFit], shared: dict, rails: Guardrails)
     out = []
     for product, fit in fits.items():
         row = {"product": product}
+        if fit.error is not None:
+            out.append({**row, "status": "error", "error": fit.error})
+            continue
         try:
-            if fit.error is not None:
-                raise ValueError(fit.error)
             agg, kind, model = fit.agg, fit.kind, fit.model
             current, cogs, comp = product_inputs(agg, model)
             p = ScenarioParams(base_cogs=cogs, fixed_monthly=0.0, capacity=np.inf, current_price=current,

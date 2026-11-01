@@ -54,8 +54,6 @@ from report import Chart, Series, VLine, build_excel, build_pdf, label_rows
 from translations import DECIMAL_COMMA, LANGUAGES, Msg, fmt_money, fmt_number, localize, translate
 
 SAMPLE_PATH = Path(__file__).resolve().parents[1] / "sample_data.csv"
-# Data warnings that ask the user to pick a file format; not shown once they have picked one
-AMBIGUITY_WARNINGS = {"warn_dates_dmy", "warn_dates_mdy", "warn_numbers_comma", "warn_numbers_point"}
 
 # Categorical slots from the validated reference palette (fixed order), light / dark steps
 PALETTE = {
@@ -102,8 +100,9 @@ def live(cached, country: str):
 
 
 @st.cache_data(show_spinner=False)
-def load_rows(raw: bytes, default_cogs: float, drop_duplicates: bool, dayfirst: bool, decimal_comma: bool):
-    return load_csv(io.BytesIO(raw), default_cogs, drop_duplicates, dayfirst, decimal_comma)
+def load_rows(raw: bytes, default_cogs: float, drop_duplicates: bool, dayfirst: bool, decimal_comma: bool,
+              explicit: bool):
+    return load_csv(io.BytesIO(raw), default_cogs, drop_duplicates, dayfirst, decimal_comma, explicit)
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
@@ -306,9 +305,7 @@ try:
     # Dates and numbers the file leaves ambiguous: the chosen file format, or with "auto" the country's
     dayfirst, decimal_comma = FILE_FORMATS[file_format] or (COUNTRY_MAP[country]["dayfirst"],
                                                             COUNTRY_MAP[country]["decimal_comma"])
-    rows, data_warnings = load_rows(raw, default_cogs, drop_dupes, dayfirst, decimal_comma)
-    if file_format != "auto":  # the user has said how to read them: no "ambiguous" warnings
-        data_warnings = [w for w in data_warnings if getattr(w, "key", None) not in AMBIGUITY_WARNINGS]
+    rows, data_warnings = load_rows(raw, default_cogs, drop_dupes, dayfirst, decimal_comma, file_format != "auto")
     if PRODUCT in rows:
         with product_slot:
             products = sorted(rows[PRODUCT].unique())

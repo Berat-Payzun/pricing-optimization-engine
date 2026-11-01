@@ -153,6 +153,8 @@ def _design(agg: pd.DataFrame, kind: str, seasonal: bool, trend: bool = False) -
     use_season = seasonal and len(data) >= SEASONAL_MIN_MONTHS and len(months) >= 2
     if seasonal and len(data) < SEASONAL_MIN_MONTHS:
         warnings.append(Msg("warn_season_short", n=len(data), min_n=SEASONAL_MIN_MONTHS))
+    elif seasonal and not use_season:  # every month in the fit is the same calendar month
+        warnings.append(Msg("warn_season_one_month"))
     elif use_season and len(months) < 12:
         warnings.append(Msg("warn_season_partial", n=12 - len(months)))
     if use_season:

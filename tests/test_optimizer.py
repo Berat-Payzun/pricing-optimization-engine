@@ -213,6 +213,13 @@ def test_seasonal_with_a_missing_month_keeps_the_other_effects():
     assert not any(w.key == "warn_season_partial" for w in full.warnings)
 
 
+def test_seasonal_with_a_single_calendar_month_warns():
+    agg = synthetic_agg(n=25)
+    agg.index = pd.date_range("2000-03-01", periods=25, freq="12MS")  # every row is a March
+    m = fit_demand(agg, "linear", seasonal=True)
+    assert m.season is None and any(w.key == "warn_season_one_month" for w in m.warnings)
+
+
 def noisy_seasonal_agg(n=30, sd=40.0, seed=5):
     agg = seasonal_agg(n=n)
     agg["Quantity_Sold"] += np.random.default_rng(seed).normal(0, sd, n)

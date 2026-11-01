@@ -95,9 +95,9 @@ def test_file_format_stops_country_changes_from_re_reading_the_file(app, monkeyp
     hints = []
     real = data_ingestion.load_csv
 
-    def spy(source, default_cogs, drop_duplicates=True, dayfirst=None, decimal_comma=None):
+    def spy(source, default_cogs, drop_duplicates=True, dayfirst=None, decimal_comma=None, explicit=False):
         hints.append((dayfirst, decimal_comma))
-        return real(source, default_cogs, drop_duplicates, dayfirst, decimal_comma)
+        return real(source, default_cogs, drop_duplicates, dayfirst, decimal_comma, explicit)
 
     monkeypatch.setattr(data_ingestion, "load_csv", spy)
     app.number_input(key="default_cogs").set_value(7.77)  # cache keys no other test has used

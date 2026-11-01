@@ -1053,6 +1053,13 @@ STRINGS: dict[str, dict[str, str]] = {
         "de": "Für {n} Kalendermonat(e) gibt es keine Daten in der Schätzung: Die Saison behandelt sie als "
               "durchschnittlichen Monat.",
     },
+    "warn_season_one_month": {
+        "en": "Every month in the fit is the same calendar month, so seasonality can't be estimated: fitted without it.",
+        "tr": "Modeldeki tüm aylar aynı takvim ayı olduğu için mevsimsellik tahmin edilemez: model mevsimsellik "
+              "olmadan kuruldu.",
+        "de": "Alle Monate in der Schätzung sind derselbe Kalendermonat, daher lässt sich keine Saison schätzen: "
+              "ohne Saison geschätzt.",
+    },
     "warn_dates_dmy": {
         "en": "Dates like 05/02/2024 can be read either way: read as day/month (5 February). If that's wrong, "
               "pick the file format in the sidebar.",
