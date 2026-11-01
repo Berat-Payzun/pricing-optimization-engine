@@ -22,6 +22,7 @@ from config import (
     BOOTSTRAP_SAMPLES,
     COUNTRY_MAP,
     DEFAULTS,
+    FILE_FORMATS,
     MAX_CHANGE_DEFAULT,
     PERIOD_MULT,
     SEASONAL_MIN_MONTHS,
@@ -48,7 +49,7 @@ from optimizer import (
     step_tradeoff,
     test_plan,
 )
-from portfolio import portfolio, product_inputs
+from portfolio import fit_products, price_products, product_inputs
 from report import Chart, Series, VLine, build_excel, build_pdf, label_rows
 from translations import DECIMAL_COMMA, LANGUAGES, Msg, fmt_money, fmt_number, localize, translate
 
@@ -99,8 +100,9 @@ def live(cached, country: str):
 
 
 @st.cache_data(show_spinner=False)
-def load_rows(raw: bytes, default_cogs: float, drop_duplicates: bool):
-    return load_csv(io.BytesIO(raw), default_cogs, drop_duplicates)
+def load_rows(raw: bytes, default_cogs: float, drop_duplicates: bool, dayfirst: bool, decimal_comma: bool,
+              explicit: bool):
+    return load_csv(io.BytesIO(raw), default_cogs, drop_duplicates, dayfirst, decimal_comma, explicit)
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
@@ -113,10 +115,19 @@ def cached_bootstrap(agg: pd.DataFrame, kind: str, seasonal: bool, trend: bool, 
     return bootstrap(agg, kind, ScenarioParams(**params), seasonal, trend=trend, ped_price=ped_price)
 
 
+# The slow per-product fits are cached apart from the pricing step, so changing fees, VAT or
+# guardrails doesn't refit every product. cache_resource hands back the same objects instead of
+# unpickling copies on every rerun; nothing downstream modifies them.
+@st.cache_resource(show_spinner=False, max_entries=16)
+def cached_portfolio_fits(rows: pd.DataFrame, cpi: pd.Series | None, model_choice: str, seasonal: bool, trend: bool):
+    return fit_products(rows, cpi, model_choice, seasonal, trend)
+
+
 @st.cache_data(show_spinner=False, max_entries=16)
 def cached_portfolio(rows: pd.DataFrame, cpi: pd.Series | None, model_choice: str, seasonal: bool, trend: bool,
                      shared: dict, rails: dict):
-    return portfolio(rows, cpi, model_choice, seasonal, trend, shared, Guardrails(**rails))
+    fits = cached_portfolio_fits(rows, cpi, model_choice, seasonal, trend)
+    return price_products(fits, shared, Guardrails(**rails))
 
 
 # ---------- language ----------
@@ -255,6 +266,8 @@ with st.sidebar:
         st.caption(t("sample_caption"))
         st.download_button(t("sample_download"), SAMPLE_PATH.read_bytes(), "sample_data.csv", "text/csv")
     drop_dupes = st.toggle(t("dupes_label"), value=True, help=t("dupes_help"), key="drop_dupes")
+    file_format = st.selectbox(t("file_format_label"), list(FILE_FORMATS), format_func=lambda f: t(f"file_format_{f}"),
+                               help=t("file_format_help"), key="file_format")
     product_slot = st.container()  # filled once the file is read, if it has a product column
 
     country = st.selectbox(t("country_label"), list(COUNTRY_MAP), format_func=lambda c: t(f"country_{c}"),
@@ -267,7 +280,8 @@ with st.sidebar:
     per = t(f"per_{timeframe}")
     default_cogs = st.number_input(t("cogs_label", sym=sym), min_value=0.0, value=DEFAULTS["cogs"],
                                    help=t("cogs_help"), key="default_cogs")
-    cost_override = st.number_input(t("cost_override_label", sym=sym), min_value=0.0, value=0.0,
+    # Empty (None) = use the data's cost, so 0 can be a real zero unit cost (e.g. digital goods)
+    cost_override = st.number_input(t("cost_override_label", sym=sym), min_value=0.0, value=None,
                                     help=t("cost_override_help"), key="cost_override")
     fixed_monthly = st.number_input(t("fixed_label", sym=sym), min_value=0.0, value=DEFAULTS["fixed_costs"], step=500.0,
                                     help=t("fixed_help"), key="fixed_monthly")
@@ -288,7 +302,10 @@ st.caption(t("app_caption", country=t(f"country_{country}"), currency=COUNTRY_MA
 raw = upload.getvalue() if upload is not None else SAMPLE_PATH.read_bytes()
 product = all_rows = None
 try:
-    rows, data_warnings = load_rows(raw, default_cogs, drop_dupes)
+    # Dates and numbers the file leaves ambiguous: the chosen file format, or with "auto" the country's
+    dayfirst, decimal_comma = FILE_FORMATS[file_format] or (COUNTRY_MAP[country]["dayfirst"],
+                                                            COUNTRY_MAP[country]["decimal_comma"])
+    rows, data_warnings = load_rows(raw, default_cogs, drop_dupes, dayfirst, decimal_comma, file_format != "auto")
     if PRODUCT in rows:
         with product_slot:
             products = sorted(rows[PRODUCT].unique())
@@ -364,7 +381,7 @@ if isinstance(model, Exception):
 excluded = agg["Excluded"].astype(bool) if "Excluded" in agg else pd.Series(False, index=agg.index)
 # In the model's money (the last month's), which differs from the nominal price only when the last month is excluded
 current_price, latest_cogs, base_comp = product_inputs(agg, model)
-base_cogs = cost_override if cost_override > 0 else latest_cogs
+base_cogs = latest_cogs if cost_override is None else cost_override
 
 with st.sidebar:
     max_price_key = f"max_price_{model_kind}_{product}_{len(agg)}"
@@ -988,7 +1005,7 @@ st.caption("This product uses the FRED® API but is not endorsed or certified by
 
 actual_units = pd.to_numeric(edited[t("col_actual")], errors="coerce")
 current_settings = dict(
-    drop_dupes=drop_dupes, country=country, timeframe=timeframe, default_cogs=default_cogs,
+    drop_dupes=drop_dupes, file_format=file_format, country=country, timeframe=timeframe, default_cogs=default_cogs,
     cost_override=cost_override, fixed_monthly=fixed_monthly, capacity=capacity, import_share=import_share,
     model_kind=model_choice, use_real=use_real, use_season=seasonal, use_trend=use_trend, product=product,
     max_price=max_price,

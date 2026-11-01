@@ -100,9 +100,9 @@ def _coef(x: float) -> str:
     return f"{x:+,.3f}" if x == 0 or abs(x) >= 0.1 else f"{x:+.3g}"
 
 
-def month_dummies(index: pd.DatetimeIndex) -> np.ndarray:
-    """One column per month Feb..Dec (January is the base)."""
-    return (np.asarray(index.month)[:, None] == np.arange(2, 13)).astype(float)
+def month_dummies(index: pd.DatetimeIndex, months=tuple(range(1, 13))) -> np.ndarray:
+    """One column per calendar month in `months` except the first, which is the base."""
+    return (np.asarray(index.month)[:, None] == np.asarray(months[1:])).astype(float)
 
 
 def month_number(index: pd.DatetimeIndex) -> np.ndarray:
@@ -122,6 +122,7 @@ class _Design:
     use_season: bool
     warnings: list[str]
     t_last: float | None = None  # trend column (last X column) value of the last month, or None without a trend
+    season_months: tuple[int, ...] = ()  # calendar months with a dummy or the base, when use_season
 
 
 def _design(agg: pd.DataFrame, kind: str, seasonal: bool, trend: bool = False) -> _Design:
@@ -146,11 +147,18 @@ def _design(agg: pd.DataFrame, kind: str, seasonal: bool, trend: bool = False) -
     else:
         X, y = data[cols].values, data["Quantity_Sold"].values
 
-    use_season = seasonal and len(data) >= SEASONAL_MIN_MONTHS
-    if seasonal and not use_season:
+    # Dummies only for the calendar months in the fit: a month with no data would get an all-zero
+    # column, which the fit silently sets equal to the base month. Missing months count as average.
+    months = tuple(sorted(set(data.index.month)))
+    use_season = seasonal and len(data) >= SEASONAL_MIN_MONTHS and len(months) >= 2
+    if seasonal and len(data) < SEASONAL_MIN_MONTHS:
         warnings.append(Msg("warn_season_short", n=len(data), min_n=SEASONAL_MIN_MONTHS))
+    elif seasonal and not use_season:  # every month in the fit is the same calendar month
+        warnings.append(Msg("warn_season_one_month"))
+    elif use_season and len(months) < 12:
+        warnings.append(Msg("warn_season_partial", n=12 - len(months)))
     if use_season:
-        X = np.hstack([X, month_dummies(data.index)])
+        X = np.hstack([X, month_dummies(data.index, months)])
     # Months counted from the first month of `agg`, so a backtest's shorter training windows share the origin
     t = month_number(data.index) - (month_number(agg.index[:1])[0] if len(agg) else 0.0)
     if trend:
@@ -159,11 +167,11 @@ def _design(agg: pd.DataFrame, kind: str, seasonal: bool, trend: bool = False) -
     if len(data) < X.shape[1] + 2:
         raise ValueError(Msg("err_not_enough_periods", n=len(data), kind=kind))
     return _Design(data, price_col, comp_col, X, y, n_dropped, use_season, warnings,
-                   float(t[-1]) if trend else None)
+                   float(t[-1]) if trend else None, months if use_season else ())
 
 
 def _model(d: _Design, kind: str, intercept: float, coef: np.ndarray, warnings: list[str]) -> DemandModel:
-    """Build a DemandModel from regression coefficients (price, [competitor], [Feb..Dec], [trend])."""
+    """Build a DemandModel from regression coefficients (price, [competitor], [month dummies], [trend])."""
     n_prices = 2 if d.comp_col else 1
     trend = None
     if d.t_last is not None:
@@ -172,9 +180,11 @@ def _model(d: _Design, kind: str, intercept: float, coef: np.ndarray, warnings: 
         coef = coef[:-1]
     season = None
     if d.use_season:
-        effects = np.concatenate([[0.0], coef[n_prices:]])  # January = base month
+        present = np.asarray(d.season_months) - 1
+        effects = np.concatenate([[0.0], coef[n_prices:]])  # the first month present is the base
         intercept += float(effects.mean())
-        season = effects - effects.mean()
+        season = np.zeros(12)  # months with no data: an average month
+        season[present] = effects - effects.mean()
     return DemandModel(
         kind=kind,
         intercept=float(intercept),
@@ -760,24 +770,38 @@ class Bootstrap:
 def bootstrap(agg: pd.DataFrame, kind: str, params: ScenarioParams, seasonal: bool = False,
               n: int = BOOTSTRAP_SAMPLES, coverage: float = 0.9, seed: int = 0, trend: bool = False,
               ped_price: float | None = None) -> Bootstrap | None:
-    """Refit demand on months resampled with replacement, and each time re-run the scenario and
-    take the elasticity at `ped_price` (default: the current price). Returns the central
-    `coverage` intervals of P* and PED, or None if fewer than half of the resamples could be
-    fitted (e.g. too little price variation)."""
+    """Refit demand on resampled data, and each time re-run the scenario and take the elasticity
+    at `ped_price` (default: the current price). Returns the central `coverage` intervals of P* and
+    PED, or None if fewer than half of the resamples could be fitted (e.g. too little price variation).
+
+    Without seasonality, months are resampled with replacement. With it, each month keeps its price
+    and calendar month and only the fit's residuals are resampled (a residual bootstrap): resampling
+    months would leave some calendar months out, and resampling within each calendar month has only
+    2-3 rows to draw from with two or three years of data, which makes the ranges too narrow."""
     d = _design(agg, kind, seasonal, trend)  # raises like fit_demand if the data can't be fitted
     s = _setup(d.comp_col is not None, params)
     mult = PERIOD_MULT[params.period]
     ped_price = params.current_price if ped_price is None else ped_price
     ped_comp = _scalar(_comp_at(params, s, ped_price))
     rng = np.random.default_rng(seed)
+    n_obs = len(d.y)
+    if d.use_season:
+        x_mean = d.X.mean(axis=0)
+        beta = np.linalg.lstsq(d.X - x_mean, d.y - d.y.mean(), rcond=None)[0]
+        fitted = d.y.mean() + (d.X - x_mean) @ beta
+        # Residuals are smaller than the errors by about (n - p) / n; scale them back up
+        resid = (d.y - fitted) * np.sqrt(n_obs / max(n_obs - d.X.shape[1] - 1, 1))
     prices, peds = [], []
     for _ in range(n):
-        idx = rng.integers(0, len(d.y), len(d.y))
-        X, y = d.X[idx], d.y[idx]
-        if np.ptp(X[:, 0]) < 1e-12:  # no price variation in this resample
-            continue
-        # Centred least squares, as LinearRegression does: when a resample misses some months
-        # the dummies and intercept are collinear, and this picks the same solution sklearn would.
+        idx = rng.integers(0, n_obs, n_obs)
+        if d.use_season:
+            X, y = d.X, fitted + resid[idx]
+        else:
+            X, y = d.X[idx], d.y[idx]
+            if np.ptp(X[:, 0]) < 1e-12:  # no price variation in this resample
+                continue
+        # Centred least squares, as LinearRegression does (the minimum-norm solution, should a
+        # resample leave the design collinear)
         x_mean, y_mean = X.mean(axis=0), y.mean()
         coef = np.linalg.lstsq(X - x_mean, y - y_mean, rcond=None)[0]
         model = _model(d, kind, y_mean - x_mean @ coef, coef, [])

@@ -79,3 +79,53 @@ def test_turkish_ui_formats_money_the_turkish_way(app):
     assert rec.endswith(" $") and "," in rec  # e.g. "53,48 $" (sample data in the default country, US)
     table = next(df.value for df in app.dataframe if "Ürün" in df.value.columns)
     assert all(v == "—" or v.endswith(" $") for v in table.iloc[:, 3])
+
+
+def test_cost_override_empty_uses_the_data_and_zero_is_a_real_cost(app):
+    assert app.number_input(key="cost_override").value is None  # empty: the file's unit cost
+    from_data = app.metric[0].value
+    app.number_input(key="cost_override").set_value(0.0).run()
+    assert not app.exception
+    assert app.metric[0].value != from_data  # zero marginal cost is priced, not ignored
+
+
+def test_file_format_stops_country_changes_from_re_reading_the_file(app, monkeypatch):
+    import data_ingestion
+
+    hints = []
+    real = data_ingestion.load_csv
+
+    def spy(source, default_cogs, drop_duplicates=True, dayfirst=None, decimal_comma=None, explicit=False):
+        hints.append((dayfirst, decimal_comma))
+        return real(source, default_cogs, drop_duplicates, dayfirst, decimal_comma, explicit)
+
+    monkeypatch.setattr(data_ingestion, "load_csv", spy)
+    app.number_input(key="default_cogs").set_value(7.77)  # cache keys no other test has used
+    app.selectbox(key="file_format").set_value("mdy_point").run()
+    app.selectbox(key="country").set_value("TR").run()
+    assert not app.exception
+    assert set(hints) == {(False, False)}  # the chosen format, never Turkey's day-first / decimal comma
+    app.selectbox(key="file_format").set_value("auto").run()
+    assert not app.exception and (True, True) in hints  # auto: Turkey's conventions
+
+
+def test_fee_change_reprices_the_portfolio_without_refitting(app, monkeypatch):
+    import portfolio
+
+    calls = {"fit": 0, "price": 0}
+    real_fit, real_price = portfolio.fit_products, portfolio.price_products
+
+    def fit(*a, **k):
+        calls["fit"] += 1
+        return real_fit(*a, **k)
+
+    def price(*a, **k):
+        calls["price"] += 1
+        return real_price(*a, **k)
+
+    monkeypatch.setattr(portfolio, "fit_products", fit)
+    monkeypatch.setattr(portfolio, "price_products", price)
+    app.number_input(key="variable_fees").set_value(12.5).run()
+    assert not app.exception and calls == {"fit": 0, "price": 1}
+    app.run()  # nothing changed: the priced table comes from the cache too
+    assert calls == {"fit": 0, "price": 1}

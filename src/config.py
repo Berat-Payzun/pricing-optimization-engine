@@ -22,6 +22,8 @@ to a monthly index. Series were verified live on 2026-10-26:
   annual % rate published with roughly a one-year lag.
 """
 
+# dayfirst / decimal_comma: how an uploaded file's ambiguous values are read when the data itself
+# can't tell (05/02/2024 as 5 February; text "1,250" as 1.25), with the "auto" file format below.
 COUNTRY_MAP = {
     "US": {
         "name": "United States",
@@ -32,6 +34,8 @@ COUNTRY_MAP = {
         "fx_yahoo": None,
         "fx_fred": None,
         "fx_invert": False,
+        "dayfirst": False,
+        "decimal_comma": False,
     },
     "EU": {
         "name": "Eurozone",
@@ -42,6 +46,8 @@ COUNTRY_MAP = {
         "fx_yahoo": "EURUSD=X",
         "fx_fred": "DEXUSEU",
         "fx_invert": True,
+        "dayfirst": True,
+        "decimal_comma": True,
     },
     "DE": {
         "name": "Germany",
@@ -52,6 +58,8 @@ COUNTRY_MAP = {
         "fx_yahoo": "EURUSD=X",
         "fx_fred": "DEXUSEU",
         "fx_invert": True,
+        "dayfirst": True,
+        "decimal_comma": True,
     },
     "FR": {
         "name": "France",
@@ -62,6 +70,8 @@ COUNTRY_MAP = {
         "fx_yahoo": "EURUSD=X",
         "fx_fred": "DEXUSEU",
         "fx_invert": True,
+        "dayfirst": True,
+        "decimal_comma": True,
     },
     "IT": {
         "name": "Italy",
@@ -72,6 +82,8 @@ COUNTRY_MAP = {
         "fx_yahoo": "EURUSD=X",
         "fx_fred": "DEXUSEU",
         "fx_invert": True,
+        "dayfirst": True,
+        "decimal_comma": True,
     },
     "ES": {
         "name": "Spain",
@@ -82,6 +94,8 @@ COUNTRY_MAP = {
         "fx_yahoo": "EURUSD=X",
         "fx_fred": "DEXUSEU",
         "fx_invert": True,
+        "dayfirst": True,
+        "decimal_comma": True,
     },
     "GB": {
         "name": "United Kingdom",
@@ -92,6 +106,8 @@ COUNTRY_MAP = {
         "fx_yahoo": "GBPUSD=X",
         "fx_fred": "DEXUSUK",
         "fx_invert": True,
+        "dayfirst": True,
+        "decimal_comma": False,
     },
     "TR": {
         "name": "Turkey",
@@ -102,6 +118,8 @@ COUNTRY_MAP = {
         "fx_yahoo": "TRY=X",
         "fx_fred": None,
         "fx_invert": False,
+        "dayfirst": True,
+        "decimal_comma": True,
     },
     "BR": {
         "name": "Brazil",
@@ -112,6 +130,8 @@ COUNTRY_MAP = {
         "fx_yahoo": "BRL=X",
         "fx_fred": "DEXBZUS",
         "fx_invert": False,
+        "dayfirst": True,
+        "decimal_comma": True,
     },
     # No single global exchange rate: global goods are priced in the reserve currency (USD).
     "WORLD": {
@@ -123,6 +143,8 @@ COUNTRY_MAP = {
         "fx_yahoo": None,
         "fx_fred": None,
         "fx_invert": False,
+        "dayfirst": True,
+        "decimal_comma": False,
     },
 }
 
@@ -173,4 +195,14 @@ DEFAULTS = {
     "fixed_costs": 5000.0,
     "capacity": 10000,
     "import_share": 30.0,
+}
+
+# The uploaded file's date order and decimal separator, as (dayfirst, decimal_comma); they only
+# decide values the data itself leaves ambiguous. "auto" takes them from the selected country, so
+# a fixed format keeps the parsed data the same when the user switches countries.
+FILE_FORMATS = {
+    "auto": None,
+    "dmy_comma": (True, True),  # 05/02/2024 · 1.234,56
+    "dmy_point": (True, False),  # 05/02/2024 · 1,234.56
+    "mdy_point": (False, False),  # 02/05/2024 · 1,234.56
 }

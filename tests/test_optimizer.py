@@ -197,11 +197,40 @@ def test_seasonal_needs_two_years():
     assert any(w.key == "warn_season_short" for w in m.warnings)
 
 
+def test_seasonal_with_a_missing_month_keeps_the_other_effects():
+    """A month with no data (closed every July) gets an average-month effect; the others are still fitted."""
+    agg = seasonal_agg()
+    m = fit_demand(agg[agg.index.month != 7], "linear", seasonal=True)
+    assert m.season is not None and m.season[6] == 0.0
+    assert any(w.key == "warn_season_partial" and w.params == {"n": 1} for w in m.warnings)
+    assert m.b == pytest.approx(B, rel=0.02)
+    true = 500 * np.sin(2 * np.pi * np.arange(12) / 12)
+    present = np.arange(12) != 6
+    # Effects are measured against the average of the months that have data
+    assert m.season[present] == pytest.approx(true[present] - true[present].mean(), abs=1.0)
+    assert m.season[present].mean() == pytest.approx(0, abs=1e-9)
+    full = fit_demand(agg, "linear", seasonal=True)
+    assert not any(w.key == "warn_season_partial" for w in full.warnings)
+
+
+def test_seasonal_with_a_single_calendar_month_warns():
+    agg = synthetic_agg(n=25)
+    agg.index = pd.date_range("2000-03-01", periods=25, freq="12MS")  # every row is a March
+    m = fit_demand(agg, "linear", seasonal=True)
+    assert m.season is None and any(w.key == "warn_season_one_month" for w in m.warnings)
+
+
+def noisy_seasonal_agg(n=30, sd=40.0, seed=5):
+    agg = seasonal_agg(n=n)
+    agg["Quantity_Sold"] += np.random.default_rng(seed).normal(0, sd, n)
+    return agg
+
+
 def test_bootstrap_range_brackets_the_optimum():
     from optimizer import optimal_price_range
 
-    agg = synthetic_agg(noise=0.05)
-    m = fit_demand(agg, "linear")
+    agg = synthetic_agg(noise=0.03)
+    m = fit_demand(agg)
     p = params(m)
     low, high = optimal_price_range(agg, "linear", p, seed=3)
     assert low < run_scenario(m, p).optimal["price"] < high
@@ -210,22 +239,46 @@ def test_bootstrap_range_brackets_the_optimum():
     assert high2 - low2 < (high - low) / 3
 
 
-def test_bootstrap_matches_full_refit_path():
-    """The fast bootstrap must agree with refitting via fit_demand + run_scenario."""
+def test_seasonal_bootstrap_matches_full_refit_path():
+    """With seasonality the bootstrap resamples residuals: it must agree with rebuilding the
+    quantities by hand and refitting via fit_demand + run_scenario."""
     from optimizer import optimal_price_range
 
-    agg = seasonal_agg(n=30)
+    agg = noisy_seasonal_agg()
     p = params(None, max_price=150)
+    m = fit_demand(agg, "linear", True)
+    fitted = np.array([m.predict(r.Price_Charged, r.Competitor_Price, ts.month) for ts, r in agg.iterrows()])
+    n, n_cols = len(agg), 2 + 11  # price, competitor, Feb..Dec
+    resid = (agg["Quantity_Sold"].to_numpy() - fitted) * np.sqrt(n / (n - n_cols - 1))
     rng = np.random.default_rng(7)
     slow = []
     for _ in range(60):
-        sample = agg.iloc[rng.integers(0, len(agg), len(agg))]
-        try:
-            slow.append(run_scenario(fit_demand(sample, "linear", True), p).optimal["price"])
-        except ValueError:
-            pass
+        sample = agg.assign(Quantity_Sold=fitted + resid[rng.integers(0, n, n)])
+        slow.append(run_scenario(fit_demand(sample, "linear", True), p).optimal["price"])
     fast = optimal_price_range(agg, "linear", p, seasonal=True, n=60, seed=7)
     assert fast == pytest.approx(tuple(np.percentile(slow, [5, 95])), rel=1e-6)
+
+
+def test_seasonal_bootstrap_range_matches_the_real_sampling_spread():
+    """The 90% range of P* should be about as wide as P* really varies across fresh datasets
+    (resampling within calendar months, with 2-3 rows each, made it far too narrow)."""
+    from optimizer import optimal_price_range
+
+    p = params(None, max_price=150)
+    truth = seasonal_agg(n=36)
+    spread = []
+    for seed in range(150):
+        noisy = truth.assign(Quantity_Sold=truth["Quantity_Sold"]
+                             + np.random.default_rng(100 + seed).normal(0, 150, 36))
+        spread.append(run_scenario(fit_demand(noisy, "linear", True), p).optimal["price"])
+    real_width = np.subtract(*np.percentile(spread, [95, 5]))
+    widths = []
+    for seed in range(5):
+        noisy = truth.assign(Quantity_Sold=truth["Quantity_Sold"]
+                             + np.random.default_rng(seed).normal(0, 150, 36))
+        low, high = optimal_price_range(noisy, "linear", p, seasonal=True, n=300, seed=seed)
+        widths.append(high - low)
+    assert 0.75 < np.mean(widths) / real_width < 1.3
 
 
 # ---------- fees, VAT and extra unit costs ----------

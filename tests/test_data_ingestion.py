@@ -294,3 +294,163 @@ def test_no_sales_at_all_is_a_clear_error():
     with pytest.raises(DataValidationError) as e:
         aggregate(df)
     assert e.value.args[0].key == "err_no_sales"
+
+
+# ---------- ambiguous dates and numbers ----------
+
+def dates_of(dates, dayfirst=None):
+    data = "Date,Price_Charged,Quantity_Sold\n" + "\n".join(f"{d},10,5" for d in dates)
+    df, warnings = load_csv(csv(data), default_cogs=1, drop_duplicates=False, dayfirst=dayfirst)
+    return [str(d.date()) for d in df["Date"]], {getattr(w, "key", None) for w in warnings}
+
+
+def test_slash_dates_are_day_first_when_a_day_is_above_12():
+    # The first value is ambiguous; 13/01 settles it for the whole column, whatever the hint says
+    dates, keys = dates_of(["05/01/2024", "13/01/2024", "20/02/2024"], dayfirst=False)
+    assert dates == ["2024-01-05", "2024-01-13", "2024-02-20"]
+    assert not keys & {"warn_dates_dmy", "warn_dates_mdy"}  # the data decided, nothing to warn about
+
+
+def test_slash_dates_are_month_first_when_the_second_field_is_above_12():
+    assert dates_of(["05/01/2024", "01/13/2024"], dayfirst=True)[0] == ["2024-01-13", "2024-05-01"]
+
+
+@pytest.mark.parametrize("dayfirst, expected, warning", [
+    (True, ["2024-01-05", "2024-02-05"], "warn_dates_dmy"),
+    (False, ["2024-05-01", "2024-05-02"], "warn_dates_mdy"),
+    (None, ["2024-05-01", "2024-05-02"], None),
+])
+def test_ambiguous_slash_dates_follow_the_hint_and_say_so(dayfirst, expected, warning):
+    dates, keys = dates_of(["05/01/2024", "05/02/2024"], dayfirst)
+    assert dates == expected
+    assert keys & {"warn_dates_dmy", "warn_dates_mdy"} == ({warning} if warning else set())
+
+
+def test_dotted_dates_stay_day_first_even_with_a_month_first_hint():
+    assert dates_of(["05.01.2024", "05.02.2024"], dayfirst=False)[0] == ["2024-01-05", "2024-02-05"]
+
+
+@pytest.mark.parametrize("dates, dayfirst, expected", [
+    (["05.02.24", "06.02.24"], None, ["2024-02-05", "2024-02-06"]),  # dotted: day first
+    (["05/02/24", "06/02/24"], True, ["2024-02-05", "2024-02-06"]),
+    (["05/02/24", "06/02/24"], False, ["2024-05-02", "2024-06-02"]),
+])
+def test_two_digit_years(dates, dayfirst, expected):
+    assert dates_of(dates, dayfirst)[0] == expected
+
+
+def test_a_column_mixing_iso_and_numeric_dates_reads_both():
+    dates, _ = dates_of(["2024-02-05", "06/02/2024", "2024-03-01 00:00:00", "07/03/2024 14:30"], dayfirst=True)
+    assert dates == ["2024-02-05", "2024-02-06", "2024-03-01", "2024-03-07"]
+
+
+def numbers_of(text, decimal_comma=None):
+    df, warnings = load_csv(io.StringIO(text), default_cogs=1, drop_duplicates=False, decimal_comma=decimal_comma)
+    return df["Quantity_Sold"].tolist(), {getattr(w, "key", None) for w in warnings}
+
+
+def test_tab_separated_us_export_follows_the_hint():
+    tsv = "Date\tPrice_Charged\tQuantity_Sold\n2024-01-01\t10\t1,250"
+    assert numbers_of(tsv, decimal_comma=False) == ([1250.0], {"warn_numbers_point", "warn_no_cost_col"})
+    assert numbers_of(tsv)[0] == [1.25]  # no hint: the old default for tab/";" files
+
+
+def xlsx_quantities(values, decimal_comma=None, products=None):
+    buf = io.BytesIO()
+    frame = pd.DataFrame({"Date": ["2024-01-01"] * len(values), "Price_Charged": ["10"] * len(values),
+                          "Quantity_Sold": values})
+    if products is not None:
+        frame["Product"] = products
+    frame.to_excel(buf, index=False)
+    df, _ = load_csv(io.BytesIO(buf.getvalue()), default_cogs=1, drop_duplicates=False,
+                     decimal_comma=decimal_comma)
+    return df["Quantity_Sold"].tolist()
+
+
+@pytest.mark.parametrize("decimal_comma, expected", [(False, 1250.0), (True, 1.25), (None, 1250.0)])
+def test_xlsx_ambiguous_text_number_follows_the_hint(decimal_comma, expected):
+    assert xlsx_quantities(["1,250"], decimal_comma) == [expected]
+
+
+@pytest.mark.parametrize("decimal_comma", [False, True])
+def test_xlsx_unambiguous_text_numbers_decide_for_the_whole_file(decimal_comma):
+    assert xlsx_quantities(["1,250", "1.234,56"], decimal_comma) == pytest.approx([1.25, 1234.56])
+    assert xlsx_quantities(["1,250", "1,234.56"], decimal_comma) == pytest.approx([1250, 1234.56])
+
+
+def test_xlsx_mixing_number_formats_keeps_every_value():
+    values = ["1,234.50"] * 10 + ["12,5"] * 3
+    assert xlsx_quantities(values) == pytest.approx([1234.5] * 10 + [12.5] * 3)
+
+
+def test_commas_in_non_numeric_columns_do_not_decide():
+    # Product codes like "2,5" would look like decimal commas; only the numeric columns count
+    assert xlsx_quantities(["1,250", "1,250"], decimal_comma=False, products=["2,5", "10,25"]) == [1250.0, 1250.0]
+
+
+def test_csv_quoted_thousands_comma_is_read():
+    data = 'Date,Price_Charged,Quantity_Sold\n2024-01-01,10,"1,234"\n2024-01-02,"1,050.50",5'
+    df, warnings = load_csv(csv(data), default_cogs=1)
+    assert df["Quantity_Sold"].tolist() == [1234, 5] and df["Price_Charged"].tolist() == [10, 1050.5]
+    assert not any(w.key == "warn_rows_dropped" for w in warnings)
+
+
+# ---------- generic status / note columns ----------
+
+def flags_of(header, values):
+    data = f"Date,Price,Qty,{header}\n" + "\n".join(f"2024-01-{i + 1:02d},{10 + i},5,{v}" for i, v in enumerate(values))
+    df, warnings = load_csv(csv(data), default_cogs=1)
+    return (df["Flag"].tolist() if "Flag" in df else None), warnings
+
+
+def test_erp_status_column_is_not_read_as_flags():
+    flags, warnings = flags_of("Status", ["Sale", "Sale", "Return"])
+    assert flags is None
+    assert any(w.key == "warn_flag_col_ignored" and w.params == {"column": "Status"} for w in warnings)
+
+
+def test_status_column_keeps_its_few_real_flags_without_warnings():
+    flags, warnings = flags_of("Status", ["Sale"] * 9 + ["stockout"])
+    assert flags == [""] * 9 + ["stockout"]
+    assert not any(w.key in ("warn_flag_unknown", "warn_flag_col_ignored") for w in warnings)
+
+
+def test_sale_marks_a_promo_in_a_flag_column():
+    flags, warnings = flags_of("Flag", ["Sale", "promo", "weird"])
+    assert flags == ["promo", "promo", ""]
+    assert any(w.key == "warn_flag_unknown" and w.params == {"values": "weird"} for w in warnings)
+
+
+def test_numeric_dates_keep_12_hour_times():
+    dates, _ = dates_of(["05/02/2024 1:30 PM", "06/02/2024 2:00 AM"], dayfirst=True)
+    assert dates == ["2024-02-05", "2024-02-06"]
+    df, _ = load_csv(csv("Date,Price,Qty\n05/02/2024 1:30 PM,10,5"), default_cogs=1, dayfirst=True)
+    assert df["Date"].iloc[0] == pd.Timestamp("2024-02-05 13:30")
+
+
+def test_dates_with_a_utc_offset_keep_their_local_time():
+    data = "Date,Price,Qty\n2024-02-05T10:00:00+01:00,10,5\n2024-02-06T23:30:00Z,11,5\n2024-02-07,12,5"
+    df, _ = load_csv(csv(data), default_cogs=1)
+    assert df["Date"].tolist() == [pd.Timestamp("2024-02-05 10:00"), pd.Timestamp("2024-02-06 23:30"),
+                                   pd.Timestamp("2024-02-07")]
+    assert df["Date"].dt.tz is None
+
+
+def test_comma_separated_file_keeps_thousands_commas_unless_a_format_is_chosen():
+    data = 'Date,Price_Charged,Quantity_Sold\n2024-01-01,19.99,"1,250"'
+    # A German country convention doesn't turn a US comma-separated export's 1,250 into 1.25
+    df, warnings = load_csv(csv(data), default_cogs=1, dayfirst=True, decimal_comma=True)
+    assert df["Quantity_Sold"].tolist() == [1250.0]
+    assert not any(getattr(w, "key", None) in ("warn_numbers_comma", "warn_numbers_point") for w in warnings)
+    # ...but a file format the user picked does
+    df, _ = load_csv(csv(data), default_cogs=1, dayfirst=True, decimal_comma=True, explicit=True)
+    assert df["Quantity_Sold"].tolist() == [1.25]
+
+
+def test_an_explicit_format_adds_no_ambiguity_warnings():
+    data = "Date\tPrice_Charged\tQuantity_Sold\n05/01/2024\t10\t1,250\n05/02/2024\t11\t1,250"
+    keys = {"warn_dates_dmy", "warn_dates_mdy", "warn_numbers_comma", "warn_numbers_point"}
+    _, auto = load_csv(io.StringIO(data), 1, False, dayfirst=True, decimal_comma=True)
+    _, chosen = load_csv(io.StringIO(data), 1, False, dayfirst=True, decimal_comma=True, explicit=True)
+    assert {getattr(w, "key", None) for w in auto} & keys == {"warn_dates_dmy", "warn_numbers_comma"}
+    assert not {getattr(w, "key", None) for w in chosen} & keys

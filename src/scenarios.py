@@ -14,12 +14,12 @@ import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from config import COUNTRY_MAP, PERIOD_MULT
+from config import COUNTRY_MAP, FILE_FORMATS, PERIOD_MULT
 from optimizer import ENDINGS
 from translations import Msg
 
 APP_ID = "pricing-optimization-engine"
-SCHEMA = 2
+SCHEMA = 3
 
 
 @dataclass(frozen=True)
@@ -28,6 +28,7 @@ class Setting:
     lo: float | None = None
     hi: float | None = None
     choices: tuple | None = None
+    optional: bool = False  # None is a valid value (saved as null), e.g. "no unit cost override"
 
 
 # Every user input, by its widget key. Inputs with a widget key that changes at runtime are
@@ -36,10 +37,11 @@ class Setting:
 # preference and is not saved.
 SETTINGS: dict[str, Setting] = {
     "drop_dupes": Setting(bool),
+    "file_format": Setting(str, choices=tuple(FILE_FORMATS)),
     "country": Setting(str, choices=tuple(COUNTRY_MAP)),
     "timeframe": Setting(str, choices=tuple(PERIOD_MULT)),
     "default_cogs": Setting(float, 0.0),
-    "cost_override": Setting(float, 0.0),
+    "cost_override": Setting(float, 0.0, optional=True),
     "fixed_monthly": Setting(float, 0.0),
     "capacity": Setting(int, 0),
     "import_share": Setting(int, 0, 100),
@@ -88,6 +90,8 @@ def dump(settings: dict, test_plan: dict | None, data: dict) -> bytes:
     for key, rule in SETTINGS.items():
         if settings.get(key) is not None:
             clean[key] = rule.kind(settings[key])
+        elif rule.optional and key in settings:
+            clean[key] = None
     doc = {
         "app": APP_ID,
         "schema": SCHEMA,
@@ -101,6 +105,8 @@ def dump(settings: dict, test_plan: dict | None, data: dict) -> bytes:
 
 def _check(value, rule: Setting):
     """(value, clipped) if `value` fits the rule, or None if it can't be used."""
+    if value is None and rule.optional:
+        return None, False
     if rule.kind is bool:
         return (value, False) if isinstance(value, bool) else None
     if rule.kind is str:
@@ -130,10 +136,13 @@ def _test_plan(raw) -> dict | None:
     return plan if len(actual) == weeks and all(a is None or math.isfinite(a) for a in actual) else None
 
 
-def _migrate(settings: dict) -> dict:
+def _migrate(settings: dict, schema) -> dict:
     """Schema 1 saved marketplace commission and payment fee as two inputs; they are now one sum.
-    A value that isn't a number is passed on so it is dropped with a warning."""
+    A value that isn't a number is passed on so it is dropped with a warning. Before schema 3 a
+    unit cost override of 0 meant "not set"; it now means a zero cost, and "not set" is null."""
     settings = dict(settings)
+    if (not isinstance(schema, int) or schema < 3) and settings.get("cost_override") == 0:
+        settings["cost_override"] = None
     old = [settings.pop(k) for k in ("commission", "payment_fee") if k in settings]
     if old and "variable_fees" not in settings:
         bad = [v for v in old if _check(v, Setting(float)) is None]
@@ -155,7 +164,7 @@ def load(raw: bytes) -> Loaded:
         warnings.append(Msg("scen_warn_newer"))
 
     settings, dropped, clipped = {}, [], []
-    for key, value in _migrate(doc["settings"]).items():
+    for key, value in _migrate(doc["settings"], doc.get("schema")).items():
         checked = _check(value, SETTINGS[key]) if key in SETTINGS else None
         if checked is None:
             dropped.append(str(key))
