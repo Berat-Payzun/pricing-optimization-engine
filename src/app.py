@@ -48,7 +48,7 @@ from optimizer import (
     step_tradeoff,
     test_plan,
 )
-from portfolio import portfolio, product_inputs
+from portfolio import fit_products, price_products, product_inputs
 from report import Chart, Series, VLine, build_excel, build_pdf, label_rows
 from translations import DECIMAL_COMMA, LANGUAGES, Msg, fmt_money, fmt_number, localize, translate
 
@@ -99,8 +99,8 @@ def live(cached, country: str):
 
 
 @st.cache_data(show_spinner=False)
-def load_rows(raw: bytes, default_cogs: float, drop_duplicates: bool):
-    return load_csv(io.BytesIO(raw), default_cogs, drop_duplicates)
+def load_rows(raw: bytes, default_cogs: float, drop_duplicates: bool, country: str):
+    return load_csv(io.BytesIO(raw), default_cogs, drop_duplicates, country)
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
@@ -113,10 +113,10 @@ def cached_bootstrap(agg: pd.DataFrame, kind: str, seasonal: bool, trend: bool, 
     return bootstrap(agg, kind, ScenarioParams(**params), seasonal, trend=trend, ped_price=ped_price)
 
 
+# Only the fits are cached: fees, VAT and guardrails change often and only need the cheap pricing step
 @st.cache_data(show_spinner=False, max_entries=16)
-def cached_portfolio(rows: pd.DataFrame, cpi: pd.Series | None, model_choice: str, seasonal: bool, trend: bool,
-                     shared: dict, rails: dict):
-    return portfolio(rows, cpi, model_choice, seasonal, trend, shared, Guardrails(**rails))
+def cached_portfolio_fits(rows: pd.DataFrame, cpi: pd.Series | None, model_choice: str, seasonal: bool, trend: bool):
+    return fit_products(rows, cpi, model_choice, seasonal, trend)
 
 
 # ---------- language ----------
@@ -267,7 +267,8 @@ with st.sidebar:
     per = t(f"per_{timeframe}")
     default_cogs = st.number_input(t("cogs_label", sym=sym), min_value=0.0, value=DEFAULTS["cogs"],
                                    help=t("cogs_help"), key="default_cogs")
-    cost_override = st.number_input(t("cost_override_label", sym=sym), min_value=0.0, value=0.0,
+    # Empty (None) = use the data's cost, so 0 can be a real zero unit cost (e.g. digital goods)
+    cost_override = st.number_input(t("cost_override_label", sym=sym), min_value=0.0, value=None,
                                     help=t("cost_override_help"), key="cost_override")
     fixed_monthly = st.number_input(t("fixed_label", sym=sym), min_value=0.0, value=DEFAULTS["fixed_costs"], step=500.0,
                                     help=t("fixed_help"), key="fixed_monthly")
@@ -288,7 +289,7 @@ st.caption(t("app_caption", country=t(f"country_{country}"), currency=COUNTRY_MA
 raw = upload.getvalue() if upload is not None else SAMPLE_PATH.read_bytes()
 product = all_rows = None
 try:
-    rows, data_warnings = load_rows(raw, default_cogs, drop_dupes)
+    rows, data_warnings = load_rows(raw, default_cogs, drop_dupes, country)
     if PRODUCT in rows:
         with product_slot:
             products = sorted(rows[PRODUCT].unique())
@@ -364,7 +365,7 @@ if isinstance(model, Exception):
 excluded = agg["Excluded"].astype(bool) if "Excluded" in agg else pd.Series(False, index=agg.index)
 # In the model's money (the last month's), which differs from the nominal price only when the last month is excluded
 current_price, latest_cogs, base_comp = product_inputs(agg, model)
-base_cogs = cost_override if cost_override > 0 else latest_cogs
+base_cogs = latest_cogs if cost_override is None else cost_override
 
 with st.sidebar:
     max_price_key = f"max_price_{model_kind}_{product}_{len(agg)}"
@@ -621,8 +622,8 @@ if all_rows is not None:
                   comp_match_cut=match_cut / 100, comp_match_rise=match_rise / 100)
     pf_rails = dict(max_change=max_change / 100, min_margin=min_margin / 100, ending=ending)
     with st.spinner(t("pf_spinner")):
-        pf = cached_portfolio(all_rows, infl.series if use_real else None, model_choice, seasonal, use_trend,
-                              shared, pf_rails)
+        fits = cached_portfolio_fits(all_rows, infl.series if use_real else None, model_choice, seasonal, use_trend)
+        pf = price_products(fits, shared, Guardrails(**pf_rails))
     pf_view = pd.DataFrame({
         t("pf_col_product"): pf["product"],
         t("pf_col_model"): [t(f"model_{k}") if isinstance(k, str) else "—" for k in pf["model"]],

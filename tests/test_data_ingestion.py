@@ -294,3 +294,82 @@ def test_no_sales_at_all_is_a_clear_error():
     with pytest.raises(DataValidationError) as e:
         aggregate(df)
     assert e.value.args[0].key == "err_no_sales"
+
+
+# ---------- ambiguous dates and numbers ----------
+
+def dates_of(dates, country=None):
+    data = "Date,Price_Charged,Quantity_Sold\n" + "\n".join(f"{d},10,5" for d in dates)
+    df, _ = load_csv(csv(data), default_cogs=1, drop_duplicates=False, country=country)
+    return [str(d.date()) for d in df["Date"]]
+
+
+def test_slash_dates_are_day_first_when_a_day_is_above_12():
+    # The first value is ambiguous; 13/01 settles it for the whole column, whatever the country
+    assert dates_of(["05/01/2024", "13/01/2024", "20/02/2024"], "US") == ["2024-01-05", "2024-01-13", "2024-02-20"]
+
+
+def test_slash_dates_are_month_first_when_the_second_field_is_above_12():
+    assert dates_of(["05/01/2024", "01/13/2024"], "GB") == ["2024-01-13", "2024-05-01"]
+
+
+@pytest.mark.parametrize("country, expected", [
+    ("GB", ["2024-01-05", "2024-02-05"]), ("TR", ["2024-01-05", "2024-02-05"]),
+    ("WORLD", ["2024-01-05", "2024-02-05"]), ("US", ["2024-05-01", "2024-05-02"]),
+    (None, ["2024-05-01", "2024-05-02"]),
+])
+def test_ambiguous_slash_dates_follow_the_country(country, expected):
+    assert dates_of(["05/01/2024", "05/02/2024"], country) == expected
+
+
+def test_dotted_dates_stay_day_first_even_for_the_us():
+    assert dates_of(["05.01.2024", "05.02.2024"], "US") == ["2024-01-05", "2024-02-05"]
+
+
+def xlsx_quantities(values, country):
+    buf = io.BytesIO()
+    pd.DataFrame({"Date": ["2024-01-01"] * len(values), "Price_Charged": ["10"] * len(values),
+                  "Quantity_Sold": values}).to_excel(buf, index=False)
+    df, _ = load_csv(io.BytesIO(buf.getvalue()), default_cogs=1, drop_duplicates=False, country=country)
+    return df["Quantity_Sold"].tolist()
+
+
+@pytest.mark.parametrize("country, expected", [("US", 1250.0), ("GB", 1250.0), ("TR", 1.25), ("DE", 1.25)])
+def test_xlsx_ambiguous_text_number_follows_the_country(country, expected):
+    assert xlsx_quantities(["1,250"], country) == [expected]
+
+
+@pytest.mark.parametrize("country", ["US", "TR"])
+def test_xlsx_unambiguous_text_numbers_decide_for_the_whole_file(country):
+    assert xlsx_quantities(["1,250", "1.234,56"], country) == pytest.approx([1.25, 1234.56])
+    assert xlsx_quantities(["1,250", "1,234.56"], country) == pytest.approx([1250, 1234.56])
+
+
+def test_csv_quoted_thousands_comma_is_read():
+    data = 'Date,Price_Charged,Quantity_Sold\n2024-01-01,10,"1,234"\n2024-01-02,"1,050.50",5'
+    df, warnings = load_csv(csv(data), default_cogs=1)
+    assert df["Quantity_Sold"].tolist() == [1234, 5] and df["Price_Charged"].tolist() == [10, 1050.5]
+    assert not any(w.key == "warn_rows_dropped" for w in warnings)
+
+
+# ---------- generic status / note columns ----------
+
+def test_erp_status_column_is_not_read_as_flags():
+    data = "Date,Price,Qty,Status\n2024-01-01,10,5,Sale\n2024-01-02,11,5,Sale\n2024-01-03,12,5,Return"
+    df, warnings = load_csv(csv(data), default_cogs=1)
+    assert "Flag" not in df.columns
+    assert any(w.key == "warn_flag_col_ignored" and w.params == {"column": "Status"} for w in warnings)
+
+
+def test_status_column_with_flag_words_is_still_used():
+    data = "Date,Price,Qty,Status\n2024-01-01,10,5,Promo\n2024-01-02,11,5,stockout\n2024-01-03,12,5,"
+    df, warnings = load_csv(csv(data), default_cogs=1)
+    assert df["Flag"].tolist() == ["promo", "stockout", ""]
+    assert not any(w.key == "warn_flag_col_ignored" for w in warnings)
+
+
+def test_sale_is_no_promo_word_even_in_a_flag_column():
+    df, warnings = load_csv(csv("Date,Price,Qty,Flag\n2024-01-01,10,5,Sale\n2024-01-02,11,5,promo"),
+                            default_cogs=1)
+    assert df["Flag"].tolist() == ["", "promo"]
+    assert any(w.key == "warn_flag_unknown" for w in warnings)

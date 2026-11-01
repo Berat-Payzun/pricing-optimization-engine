@@ -2,6 +2,7 @@ import io
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from data_ingestion import load_csv
 from optimizer import Guardrails
@@ -52,3 +53,31 @@ def test_products_without_sales_or_without_a_profitable_price_say_so():
     pf = portfolio(rows, None, "linear", False, False, SHARED, Guardrails()).set_index("product")
     assert pf.loc["Dead", "status"] == "error" and pf.loc["Dead", "error"].key == "err_no_sales"
     assert pf.loc["Costly", "status"] == "no_profit"
+
+
+def test_unit_cost_is_in_the_same_money_as_the_price_when_last_months_are_excluded():
+    from data_ingestion import aggregate, deflate
+    from optimizer import fit_demand
+    from portfolio import product_inputs
+
+    idx = pd.date_range("2023-01-01", periods=24, freq="MS")
+    price = np.random.default_rng(1).uniform(40, 60, 24)
+    rows = pd.DataFrame({"Date": idx, "Price_Charged": price, "Quantity_Sold": 3000 - 40 * price,
+                         "Cost_Per_Unit": 20.0, "Flag": [""] * 22 + ["promo"] * 2})
+    cpi = pd.Series(1.03 ** np.arange(24), index=idx)  # 3% a month
+    agg, _ = deflate(aggregate(rows)[0], cpi)
+    current, cogs, _ = product_inputs(agg, fit_demand(agg))
+    assert current == pytest.approx(price[21] * 1.03 ** 2)
+    assert cogs == pytest.approx(20.0 * 1.03 ** 2)  # deflated like the price, not the nominal 20
+
+
+def test_pricing_step_reuses_the_fits():
+    from portfolio import fit_products, price_products
+
+    rows = multi_product_rows()
+    fits = fit_products(rows, None, "auto", False, False)
+    assert list(fits) == ["A", "B", "C"] and fits["C"].error.key == "err_too_few_months"
+    shared = {**SHARED, "fee_rate": 0.1}
+    for rails in (Guardrails(max_change=0), Guardrails(max_change=0.05)):
+        expected = portfolio(rows, None, "auto", False, False, shared, rails)
+        pd.testing.assert_frame_equal(price_products(fits, shared, rails), expected)

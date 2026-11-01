@@ -60,3 +60,25 @@ def test_pdf_with_overlapping_markers_builds():
                           VLine(29.9, "Edge $29.90", "#898781")])
     pdf = build_pdf("T", "", [("Price", "$16.99")], chart)
     assert pdf[:4] == b"%PDF"
+
+
+def test_pdf_wraps_long_summary_values(monkeypatch):
+    import report
+
+    long = "KDV -9,83 ₺ · Ücretler -8,85 ₺ · Birim maliyet -23,72 ₺ · Marj 16,58 ₺ (%28,1)"
+    heights = {}
+    real = report._PDF.multi_cell
+
+    def spy(self, w, h, text="", *args, **kwargs):
+        y0 = self.get_y()
+        out = real(self, w, h, text, *args, **kwargs)
+        if not kwargs.get("dry_run") and text == long:
+            heights[text] = self.get_y() - y0
+        return out
+
+    monkeypatch.setattr(report._PDF, "multi_cell", spy)
+    x = np.linspace(10, 100, 50)
+    chart = Chart("Kâr", x, [Series("Net kâr", -(x - 50) ** 2 + 900, "#2a78d6")])
+    pdf = build_pdf("Başlık", "Alt", [("Birim başına", long), ("Sonraki", "x")], chart)
+    assert pdf.startswith(b"%PDF")
+    assert heights[long] == 12  # two 6 mm lines inside the value column, not one clipped line

@@ -106,3 +106,19 @@ def test_session_updates_map_runtime_keys():
     assert updates["_pending_max_price"] == 120.0 and updates["_pending_product"] == "Kahve"
     assert updates["shock_country"] == "TR" and updates["shock_infl"] == 29.5
     assert "max_price" not in updates and "product" not in updates
+
+
+def test_empty_cost_override_round_trips_as_null():
+    loaded = load(dump({**SETTINGS, "cost_override": None}, None, DATA))
+    assert "cost_override" in loaded.settings and loaded.settings["cost_override"] is None
+    assert loaded.warnings == []
+    assert load(dump({**SETTINGS, "cost_override": 0.0}, None, DATA)).settings["cost_override"] == 0.0
+
+
+@pytest.mark.parametrize("schema, expected", [(1, None), (2, None), (scenarios.SCHEMA, 0.0)])
+def test_old_zero_cost_override_meant_not_set(schema, expected):
+    d = json.loads(doc(schema=schema))
+    d["settings"]["cost_override"] = 0
+    assert load(json.dumps(d).encode()).settings["cost_override"] == expected
+    d["settings"]["cost_override"] = 12.5  # a real override is kept from any schema
+    assert load(json.dumps(d).encode()).settings["cost_override"] == 12.5

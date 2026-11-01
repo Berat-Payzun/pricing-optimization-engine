@@ -79,3 +79,11 @@ def test_turkish_ui_formats_money_the_turkish_way(app):
     assert rec.endswith(" $") and "," in rec  # e.g. "53,48 $" (sample data in the default country, US)
     table = next(df.value for df in app.dataframe if "Ürün" in df.value.columns)
     assert all(v == "—" or v.endswith(" $") for v in table.iloc[:, 3])
+
+
+def test_cost_override_empty_uses_the_data_and_zero_is_a_real_cost(app):
+    assert app.number_input(key="cost_override").value is None  # empty: the file's unit cost
+    from_data = app.metric[0].value
+    app.number_input(key="cost_override").set_value(0.0).run()
+    assert not app.exception
+    assert app.metric[0].value != from_data  # zero marginal cost is priced, not ignored

@@ -197,6 +197,33 @@ def test_seasonal_needs_two_years():
     assert any(w.key == "warn_season_short" for w in m.warnings)
 
 
+def test_seasonal_needs_every_calendar_month():
+    """A month missing from the data (closed every July) would be fitted as January: fit without season."""
+    agg = seasonal_agg()
+    m = fit_demand(agg[agg.index.month != 7], "linear", seasonal=True)
+    assert m.season is None
+    assert any(w.key == "warn_season_missing" and w.params == {"n": 1} for w in m.warnings)
+    assert fit_demand(agg, "linear", seasonal=True).season is not None
+
+
+def test_seasonal_bootstrap_resamples_keep_every_month(monkeypatch):
+    """Each seasonal resample holds all 12 calendar months, so no month dummy is all zero."""
+    import optimizer
+
+    agg = seasonal_agg(n=36)
+    n_months = []
+    real_lstsq = np.linalg.lstsq
+
+    def spy(a, b, rcond=None):
+        n_months.append(int((np.abs(a[:, 2:13]).sum(axis=0) > 1e-12).sum()))  # Feb..Dec dummies after centring
+        return real_lstsq(a, b, rcond=rcond)
+
+    monkeypatch.setattr(optimizer.np.linalg, "lstsq", spy)
+    b = optimizer.bootstrap(agg, "linear", params(None, max_price=150), seasonal=True, n=200, seed=0)
+    assert b is not None and len(n_months) == 200
+    assert set(n_months) == {11}
+
+
 def test_bootstrap_range_brackets_the_optimum():
     from optimizer import optimal_price_range
 
@@ -217,9 +244,12 @@ def test_bootstrap_matches_full_refit_path():
     agg = seasonal_agg(n=30)
     p = params(None, max_price=150)
     rng = np.random.default_rng(7)
+    # Seasonal resamples are drawn within each calendar month (see bootstrap)
+    strata = [np.flatnonzero(agg.index.month == m) for m in range(1, 13)]
     slow = []
     for _ in range(60):
-        sample = agg.iloc[rng.integers(0, len(agg), len(agg))]
+        sample = agg.iloc[np.concatenate([rng.choice(rows, len(rows)) for rows in strata])]
+        assert sample.index.month.nunique() == 12
         try:
             slow.append(run_scenario(fit_demand(sample, "linear", True), p).optimal["price"])
         except ValueError:

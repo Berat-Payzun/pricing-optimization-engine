@@ -211,9 +211,15 @@ def build_pdf(title: str, subtitle: str, summary: list[tuple[str, str]], chart: 
     for i, (label, value) in enumerate(summary):
         fill = i % 2 == 0
         pdf.set_fill_color(245, 245, 243)
-        pdf.cell(label_w, 6, label, fill=fill)
+        # Long values (per-unit breakdown, guardrails, the equation) wrap within the value column
         pdf.set_font("DejaVu", "B", 9)
-        pdf.cell(0, 6, value, fill=fill, new_x="LMARGIN", new_y="NEXT")
+        n_lines = len(pdf.multi_cell(pdf.epw - label_w, 6, value, dry_run=True, output="LINES"))
+        if pdf.get_y() + 6 * n_lines > pdf.h - pdf.b_margin:
+            pdf.add_page()
+        pdf.set_font("DejaVu", "", 9)
+        pdf.cell(label_w, 6 * n_lines, label, fill=fill)
+        pdf.set_font("DejaVu", "B", 9)
+        pdf.multi_cell(0, 6, value, fill=fill, new_x="LMARGIN", new_y="NEXT")
         pdf.set_font("DejaVu", "", 9)
 
     pdf.ln(4)

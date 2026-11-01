@@ -146,9 +146,14 @@ def _design(agg: pd.DataFrame, kind: str, seasonal: bool, trend: bool = False) -
     else:
         X, y = data[cols].values, data["Quantity_Sold"].values
 
-    use_season = seasonal and len(data) >= SEASONAL_MIN_MONTHS
-    if seasonal and not use_season:
+    # A calendar month with no data would get an all-zero dummy, which the fit silently sets equal to
+    # January; re-centring would then move that error into the average-month demand level
+    n_missing = 12 - len(set(data.index.month))
+    use_season = seasonal and len(data) >= SEASONAL_MIN_MONTHS and n_missing == 0
+    if seasonal and len(data) < SEASONAL_MIN_MONTHS:
         warnings.append(Msg("warn_season_short", n=len(data), min_n=SEASONAL_MIN_MONTHS))
+    elif seasonal and not use_season:
+        warnings.append(Msg("warn_season_missing", n=n_missing))
     if use_season:
         X = np.hstack([X, month_dummies(data.index)])
     # Months counted from the first month of `agg`, so a backtest's shorter training windows share the origin
@@ -770,14 +775,18 @@ def bootstrap(agg: pd.DataFrame, kind: str, params: ScenarioParams, seasonal: bo
     ped_price = params.current_price if ped_price is None else ped_price
     ped_comp = _scalar(_comp_at(params, s, ped_price))
     rng = np.random.default_rng(seed)
+    # With month effects, months are resampled within each calendar month, so every resample keeps
+    # all 12 (one missing would get an all-zero dummy and be read as January)
+    strata = [np.flatnonzero(d.data.index.month == m) for m in range(1, 13)] if d.use_season else None
     prices, peds = [], []
     for _ in range(n):
-        idx = rng.integers(0, len(d.y), len(d.y))
+        idx = (np.concatenate([rng.choice(rows, len(rows)) for rows in strata]) if strata
+               else rng.integers(0, len(d.y), len(d.y)))
         X, y = d.X[idx], d.y[idx]
         if np.ptp(X[:, 0]) < 1e-12:  # no price variation in this resample
             continue
-        # Centred least squares, as LinearRegression does: when a resample misses some months
-        # the dummies and intercept are collinear, and this picks the same solution sklearn would.
+        # Centred least squares, as LinearRegression does (the minimum-norm solution, should a
+        # resample still leave the design collinear).
         x_mean, y_mean = X.mean(axis=0), y.mean()
         coef = np.linalg.lstsq(X - x_mean, y - y_mean, rcond=None)[0]
         model = _model(d, kind, y_mean - x_mean @ coef, coef, [])

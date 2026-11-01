@@ -44,11 +44,11 @@ STRINGS: dict[str, dict[str, str]] = {
         "de": "Stückkosten überschreiben ({sym})",
     },
     "cost_override_help": {
-        "en": "Replaces the latest Cost_Per_Unit from the data, to test 'what if my unit cost were X?'. 0 = use the data.",
+        "en": "Replaces the latest Cost_Per_Unit from the data, to test 'what if my unit cost were X?'. Leave empty to use the data; 0 is a zero unit cost.",
         "tr": "Verideki son Cost_Per_Unit değerinin yerine geçer; 'birim maliyetim X olsaydı?' sorusunu test etmek için. "
-              "0 = veriyi kullan.",
+              "Veriyi kullanmak için boş bırakın; 0 sıfır birim maliyet demektir.",
         "de": "Ersetzt die letzten Cost_Per_Unit aus den Daten, um „Was wäre, wenn meine Stückkosten X wären?“ zu testen. "
-              "0 = Daten verwenden.",
+              "Leer lassen, um die Daten zu verwenden; 0 bedeutet Stückkosten von null.",
     },
     "season_label": {"en": "Adjust for seasonality", "tr": "Mevsimselliğe göre düzelt", "de": "Saisonbereinigung"},
     "season_help": {
@@ -1047,6 +1047,13 @@ STRINGS: dict[str, dict[str, str]] = {
         "tr": "Mevsimsellik için en az {min_n} aylık veri gerekir ({n} ay mevcut): model mevsimsellik olmadan kuruldu.",
         "de": "Saisonbereinigung braucht mindestens {min_n} Monate Daten ({n} vorhanden): ohne Saison geschätzt.",
     },
+    "warn_season_missing": {
+        "en": "Seasonality needs every calendar month in the fit, but {n} month(s) have no data: fitted without it.",
+        "tr": "Mevsimsellik için modelde her takvim ayı bulunmalı, ancak {n} ayın verisi yok: model mevsimsellik "
+              "olmadan kuruldu.",
+        "de": "Saisonbereinigung braucht jeden Kalendermonat in der Schätzung, aber für {n} Monat(e) fehlen Daten: "
+              "ohne Saison geschätzt.",
+    },
     "warn_cpi_stale": {
         "en": "CPI data ends {as_of}: later months are not inflation-adjusted.",
         "tr": "TÜFE verisi {as_of} itibarıyla bitiyor: sonraki aylar enflasyona göre düzeltilmedi.",
@@ -1252,6 +1259,14 @@ STRINGS: dict[str, dict[str, str]] = {
               "kullanılıyor. Uygulamanın gizli ayarlarına FRED_API_KEY ekleyin (README'ye bakın).",
         "de": "Kein FRED-API-Schlüssel gesetzt: FRED-Inflations-/Wechselkursdaten wurden nicht abgerufen, es "
               "gelten eingebaute Werte. FRED_API_KEY in den Secrets der App hinterlegen (siehe README).",
+    },
+    "warn_flag_col_ignored": {
+        "en": "Column '{column}' was not used as the Flag column: most of its values aren't 'stockout' or 'promo' "
+              "(e.g. a transaction status). Rename it to 'Flag' to use it anyway.",
+        "tr": "'{column}' sütunu Flag sütunu olarak kullanılmadı: değerlerinin çoğu 'stok yok' veya 'kampanya' değil "
+              "(ör. bir işlem durumu). Yine de kullanmak için adını 'Flag' yapın.",
+        "de": "Spalte „{column}“ wurde nicht als Flag-Spalte verwendet: Die meisten Werte sind nicht „ausverkauft“ "
+              "oder „Aktion“ (z. B. ein Transaktionsstatus). Benennen Sie sie in „Flag“ um, um sie trotzdem zu nutzen.",
     },
     "warn_flag_unknown": {
         "en": "Unrecognised Flag value(s) treated as normal sales: {values}. Use 'stockout' or 'promo'.",
