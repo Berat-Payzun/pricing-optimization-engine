@@ -21,6 +21,14 @@ def synthetic_agg(kind="linear", n=36, noise=0.0, seed=0):
                         index=idx)
 
 
+def price_range(*args, **kwargs):
+    """The bootstrap's range of P* (see optimizer.bootstrap), or None."""
+    from optimizer import bootstrap
+
+    b = bootstrap(*args, **kwargs)
+    return None if b is None else b.price
+
+
 def params(model, **kw):
     base = dict(base_cogs=20.0, fixed_monthly=1000.0, capacity=1e12, base_comp_price=50.0,
                 current_price=45.0, max_price=120.0)
@@ -227,23 +235,19 @@ def noisy_seasonal_agg(n=30, sd=40.0, seed=5):
 
 
 def test_bootstrap_range_brackets_the_optimum():
-    from optimizer import optimal_price_range
-
     agg = synthetic_agg(noise=0.03)
     m = fit_demand(agg)
     p = params(m)
-    low, high = optimal_price_range(agg, "linear", p, seed=3)
+    low, high = price_range(agg, "linear", p, seed=3)
     assert low < run_scenario(m, p).optimal["price"] < high
     # Less noise, narrower range
-    low2, high2 = optimal_price_range(synthetic_agg(noise=0.005), "linear", p, seed=3)
+    low2, high2 = price_range(synthetic_agg(noise=0.005), "linear", p, seed=3)
     assert high2 - low2 < (high - low) / 3
 
 
 def test_seasonal_bootstrap_matches_full_refit_path():
     """With seasonality the bootstrap resamples residuals: it must agree with rebuilding the
     quantities by hand and refitting via fit_demand + run_scenario."""
-    from optimizer import optimal_price_range
-
     agg = noisy_seasonal_agg()
     p = params(None, max_price=150)
     m = fit_demand(agg, "linear", True)
@@ -255,15 +259,13 @@ def test_seasonal_bootstrap_matches_full_refit_path():
     for _ in range(60):
         sample = agg.assign(Quantity_Sold=fitted + resid[rng.integers(0, n, n)])
         slow.append(run_scenario(fit_demand(sample, "linear", True), p).optimal["price"])
-    fast = optimal_price_range(agg, "linear", p, seasonal=True, n=60, seed=7)
+    fast = price_range(agg, "linear", p, seasonal=True, n=60, seed=7)
     assert fast == pytest.approx(tuple(np.percentile(slow, [5, 95])), rel=1e-6)
 
 
 def test_seasonal_bootstrap_range_matches_the_real_sampling_spread():
     """The 90% range of P* should be about as wide as P* really varies across fresh datasets
     (resampling within calendar months, with 2-3 rows each, made it far too narrow)."""
-    from optimizer import optimal_price_range
-
     p = params(None, max_price=150)
     truth = seasonal_agg(n=36)
     spread = []
@@ -276,7 +278,7 @@ def test_seasonal_bootstrap_range_matches_the_real_sampling_spread():
     for seed in range(5):
         noisy = truth.assign(Quantity_Sold=truth["Quantity_Sold"]
                              + np.random.default_rng(seed).normal(0, 150, 36))
-        low, high = optimal_price_range(noisy, "linear", p, seasonal=True, n=300, seed=seed)
+        low, high = price_range(noisy, "linear", p, seasonal=True, n=300, seed=seed)
         widths.append(high - low)
     assert 0.75 < np.mean(widths) / real_width < 1.3
 
@@ -319,12 +321,10 @@ def test_extra_unit_cost_inflates_with_local_inflation():
 
 
 def test_bootstrap_range_brackets_optimum_with_fees():
-    from optimizer import optimal_price_range
-
     agg = synthetic_agg(noise=0.05)
     m = fit_demand(agg, "linear")
     p = params(m, fee_rate=0.2, vat=0.2)
-    low, high = optimal_price_range(agg, "linear", p, seed=3)
+    low, high = price_range(agg, "linear", p, seed=3)
     assert low < run_scenario(m, p).optimal["price"] < high
 
 
@@ -430,8 +430,6 @@ def test_stockouts_bias_slope_unless_flagged():
 
 
 def test_excluded_months_are_skipped_by_fit_and_bootstrap():
-    from optimizer import optimal_price_range
-
     clean = synthetic_agg(noise=0.05)
     dirty = pd.concat([clean, clean.iloc[:4].set_axis(pd.date_range("2027-01-01", periods=4, freq="MS"))
                        .assign(Quantity_Sold=0.0)])
@@ -439,7 +437,7 @@ def test_excluded_months_are_skipped_by_fit_and_bootstrap():
     m_clean, m_dirty = fit_demand(clean, "linear"), fit_demand(dirty, "linear")
     assert (m_dirty.b, m_dirty.n) == (pytest.approx(m_clean.b), m_clean.n)
     p = params(m_clean)
-    assert optimal_price_range(dirty, "linear", p, seed=1) == optimal_price_range(clean, "linear", p, seed=1)
+    assert price_range(dirty, "linear", p, seed=1) == price_range(clean, "linear", p, seed=1)
 
 
 # ---------- rolling backtest ----------
@@ -635,8 +633,8 @@ def test_reaction_works_for_loglog_and_flows_into_range_recommend_and_not_test_p
     assert np.isfinite(r1.curve["profit"]).all() and r1.optimal["price"] != r0.optimal["price"]
     rails = optimizer.Guardrails(max_change=0)
     assert optimizer.recommend(m, p1, r1, rails).price == r1.optimal["price"]
-    range0 = optimizer.optimal_price_range(agg, "loglog", p0, seed=2)
-    assert optimizer.optimal_price_range(agg, "loglog", p1, seed=2) != range0
+    range0 = price_range(agg, "loglog", p0, seed=2)
+    assert price_range(agg, "loglog", p1, seed=2) != range0
     t0 = optimizer.test_plan(m, p0, 50.0, 5.0, rails)
     t1 = optimizer.test_plan(m, p1, 50.0, 5.0, rails)
     assert (t1.expected_test, t1.expected_current) == (t0.expected_test, t0.expected_current)
@@ -714,14 +712,14 @@ def test_trend_prices_at_the_latest_months_demand_level():
 
 
 def test_trend_flows_into_backtest_and_bootstrap():
-    from optimizer import backtest, optimal_price_range
+    from optimizer import backtest
 
     agg = growing_agg()
     plain, trended = backtest(agg, "linear"), backtest(agg, "linear", trend=True)
     assert trended.wape < plain.wape
     m = fit_demand(agg, "linear", trend=True)
     p = params(m, current_price=45.0, base_comp_price=None)
-    low, high = optimal_price_range(agg, "linear", p, n=60, trend=True)
+    low, high = price_range(agg, "linear", p, n=60, trend=True)
     assert low <= run_scenario(m, p).optimal["price"] <= high
 
 
@@ -738,9 +736,7 @@ def test_bootstrap_ped_interval_brackets_the_true_elasticity():
 
 
 def optimizer_range(agg, m):
-    from optimizer import optimal_price_range
-
-    return optimal_price_range(agg, "loglog", params(m), n=100, seed=2)
+    return price_range(agg, "loglog", params(m), n=100, seed=2)
 
 
 def test_ped_confidence_levels():
@@ -839,3 +835,71 @@ def test_auto_skips_demand_that_rises_with_price():
                       {"linear": bt(0.0), "loglog": bt(20.0)}) == "loglog"
     # both slope upward: the old rule (lowest error) still picks one
     assert best_model({"linear": model(4.5), "loglog": model(1.5)}, {"linear": bt(0.0), "loglog": bt(20.0)}) == "linear"
+
+
+
+# ---------- price endings, search range, break-evens, backtest trend step ----------
+
+@pytest.mark.parametrize("price, ending, expected", [
+    (10.95, ".90", [10.90, 11.90]),
+    (10.995, ".99", [10.99, 11.99]),
+    (10.50, ".90", [9.90, 10.90]),
+    (10.90, ".90", [10.90, 10.90]),
+    (10.4, "whole", [10.0, 11.0]),
+])
+def test_price_endings_bracket_the_price(price, ending, expected):
+    from optimizer import _with_ending
+
+    assert _with_ending(price, ending) == pytest.approx(expected)
+
+
+def test_ending_above_a_floor_is_used():
+    """The optimum (10) is below the floor (10.95): the next .90 price inside the band is 11.90."""
+    from optimizer import Guardrails, recommend
+
+    m = DemandModel("linear", 1000.0, -50.0, None, 1.0, 24, 0, 5.0, 15.0)
+    p = params(m, base_cogs=0.0, current_price=11.0, max_price=30.0)
+    rec = recommend(m, p, run_scenario(m, p), Guardrails(max_change=0, floor=10.95, ceiling=12.0, ending=".90"))
+    assert rec.price == pytest.approx(11.90)
+    assert "warn_guardrail_ending" not in [w.key for w in rec.warnings]
+
+
+def test_price_search_follows_the_price_level_under_passthrough():
+    """Real optimum 18 with the highest observed price 10: with 30% inflation passed through the
+    nominal optimum is 23.4, above the 2× max price of 20, and must still be found."""
+    m = DemandModel("linear", 360.0, -10.0, None, 1.0, 24, 0, 5.0, 10.0)
+    today = run_scenario(m, params(m, base_cogs=0.0, current_price=10.0, max_price=20.0))
+    shocked = run_scenario(m, params(m, base_cogs=0.0, current_price=10.0, max_price=20.0, inflation=0.3,
+                                     price_passthrough=True))
+    assert shocked.edge is None and "warn_opt_at_top" not in [w.key for w in shocked.warnings]
+    assert shocked.optimal["price"] == pytest.approx(today.optimal["price"] * 1.3, rel=0.01)
+    assert today.optimal["price"] == pytest.approx(18, rel=0.01)
+
+
+def test_a_zero_profit_grid_point_is_one_break_even():
+    from optimizer import _break_evens
+
+    grid = np.array([10.0, 11.0, 12.0, 13.0, 14.0])
+    assert _break_evens(grid, np.array([-5.0, 0.0, 7.0, 0.0, -3.0])) == [11.0, 13.0]
+    assert _break_evens(grid, np.array([-5.0, -1.0, 3.0, 4.0, 5.0])) == [pytest.approx(11.25)]
+
+
+def test_optimum_at_the_bottom_warns():
+    m = fit_demand(synthetic_agg("loglog"), "loglog")
+    r = run_scenario(m, params(m, base_cogs=0.0))
+    assert r.edge == "low" and "warn_opt_at_bottom" in [w.key for w in r.warnings]
+
+
+def test_backtest_trend_step_counts_from_the_last_fitted_month():
+    """Log-log drops zero-sales months: after one, the forecast is two months on from the fit's level."""
+    from optimizer import backtest
+
+    agg = synthetic_agg("loglog", n=30, noise=0.02)
+    agg.iloc[27, agg.columns.get_loc("Quantity_Sold")] = 0.0
+    bt = backtest(agg, "loglog", trend=True, horizon=3)
+    model = fit_demand(agg.iloc[:28], "loglog", trend=True)
+    assert model.fitted_through == agg.index[26]
+    row = agg.iloc[28]
+    expected = model.predict(row["Price_Charged"], row["Competitor_Price"], agg.index[28].month, 2.0)
+    assert bt.months[1] == agg.index[28]
+    assert bt.forecast[1] == pytest.approx(float(expected))

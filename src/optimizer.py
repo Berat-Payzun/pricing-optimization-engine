@@ -59,6 +59,9 @@ class DemandModel:
     # Change in demand per month (units for linear, log units for log-log) or None. The intercept is
     # for the last fitted month, so the optimizer prices at today's demand level, not a past average.
     trend: float | None = None
+    # The last month the fit used (a log-log fit drops zero-sales months, so it can be earlier than
+    # the data's last month); with a trend, forecasts move on from this month's demand level
+    fitted_through: pd.Timestamp | None = None
 
     @property
     def has_comp(self) -> bool:
@@ -125,13 +128,20 @@ class _Design:
     season_months: tuple[int, ...] = ()  # calendar months with a dummy or the base, when use_season
 
 
-def _design(agg: pd.DataFrame, kind: str, seasonal: bool, trend: bool = False) -> _Design:
-    if "Excluded" in agg:  # stockout / promo months (data_ingestion.aggregate)
+def _fit_frame(agg: pd.DataFrame) -> tuple[pd.DataFrame, str, str | None]:
+    """The months a demand fit uses (stockout / promo months from data_ingestion.aggregate left out)
+    and its price and competitor columns: the deflated ones when there are, else nominal."""
+    if "Excluded" in agg:
         agg = agg[~agg["Excluded"].astype(bool)]
     price_col = "Real_Price" if "Real_Price" in agg else "Price_Charged"
     comp_col = "Real_Competitor_Price" if "Real_Competitor_Price" in agg else (
         "Competitor_Price" if "Competitor_Price" in agg else None
     )
+    return agg, price_col, comp_col
+
+
+def _design(agg: pd.DataFrame, kind: str, seasonal: bool, trend: bool = False) -> _Design:
+    agg, price_col, comp_col = _fit_frame(agg)
     cols = [price_col] + ([comp_col] if comp_col else [])
     data = agg[cols + ["Quantity_Sold"]].dropna()
     warnings: list[str] = []
@@ -198,6 +208,7 @@ def _model(d: _Design, kind: str, intercept: float, coef: np.ndarray, warnings: 
         warnings=warnings,
         season=season,
         trend=trend,
+        fitted_through=d.data.index[-1] if len(d.data) else None,
     )
 
 
@@ -355,9 +366,11 @@ def _setup(has_comp: bool, p: ScenarioParams) -> _Setup:
     comp_real = p.base_comp_price * (1 + p.comp_shift) if has_comp else None
     # Steps 6-7
     cogs_final, fixed_final = shocked_costs(p)
-    # Step 8: grid scales with price level, so it works for $5 items and ₺50,000 items alike
+    # Step 8: grid scales with price level, so it works for $5 items and ₺50,000 items alike. The max
+    # price is in today's money: under pass-through demand is read at price / level, so the search
+    # goes up to max_price × level, or a real optimum near the top could not be reached.
     low = max(0.01, min(cogs_final, p.current_price) * 0.9)
-    high = max(p.max_price, low * 1.5)
+    high = max(p.max_price * level, low * 1.5)
     return _Setup(level, comp_real, cogs_final, fixed_final, np.linspace(low, high, PRICE_GRID_POINTS))
 
 
@@ -375,6 +388,19 @@ def _comp_at(p: ScenarioParams, s: _Setup, price) -> np.ndarray | float | None:
 def competitor_price_at(model: DemandModel, p: ScenarioParams, price: float) -> float | None:
     """The competitor's real price, after any reaction, when we charge nominal `price`."""
     return _scalar(_comp_at(p, _setup(model.has_comp, p), price))
+
+
+def _break_evens(grid: np.ndarray, profit: np.ndarray) -> list[float]:
+    """Prices where profit crosses zero, interpolated between grid points. A crossing is where
+    profit turns from negative to non-negative or back; with np.sign, a grid point at exactly zero
+    would count as a crossing on both of its sides and be listed twice."""
+    crossings = np.where(np.diff(profit >= 0))[0]
+    return [
+        float(np.interp(0, [profit[j], profit[j + 1]], [grid[j], grid[j + 1]]))
+        if profit[j] < profit[j + 1]
+        else float(np.interp(0, [profit[j + 1], profit[j]], [grid[j + 1], grid[j]]))
+        for j in crossings
+    ]
 
 
 def run_scenario(model: DemandModel, p: ScenarioParams) -> ScenarioResult:
@@ -403,19 +429,15 @@ def run_scenario(model: DemandModel, p: ScenarioParams) -> ScenarioResult:
     ped_current, _ = elasticities(model, p.current_price / level, _scalar(_comp_at(p, s, p.current_price)))
 
     profit = curve["profit"].values
-    crossings = np.where(np.diff(np.sign(profit)) != 0)[0]
-    break_evens = [
-        float(np.interp(0, [profit[j], profit[j + 1]], [grid[j], grid[j + 1]]))
-        if profit[j] < profit[j + 1]
-        else float(np.interp(0, [profit[j + 1], profit[j]], [grid[j + 1], grid[j]]))
-        for j in crossings
-    ]
+    break_evens = _break_evens(grid, profit)
 
     # Contribution (profit before fixed costs) must be positive somewhere, or every sale loses money
     viable = bool((profit + fixed_final).max() > 0)
     edge = "high" if i == len(grid) - 1 else "low" if i == 0 else None
     if edge == "high":
         warnings.append(Msg("warn_opt_at_top"))
+    elif edge == "low" and viable:  # not viable: a flat curve, whose first point means nothing
+        warnings.append(Msg("warn_opt_at_bottom"))
     if not (model.p_min <= optimal["price"] / level <= model.p_max):  # observed range is in real terms
         warnings.append(Msg("warn_extrapolated", p_min=model.p_min, p_max=model.p_max))
     if viable and optimal["profit"] < 0:  # sales cover their own costs, but not the fixed costs
@@ -474,12 +496,15 @@ def _bounds(rails: Guardrails, current_price: float) -> tuple[float, float]:
 
 
 def _with_ending(price: float, ending: str) -> list[float]:
-    """The nearest price points below and above `price` with the given ending."""
+    """The nearest price points at or below and at or above `price` with the given ending
+    (10.95 with ".90": 10.90 and 11.90)."""
     if ending == "whole":
         return [float(np.floor(price)), float(np.ceil(price))]
     cents = {".99": 0.99, ".90": 0.90}[ending]
     base = np.floor(price)
-    return [float(base - 1 + cents), float(base + cents)]
+    points = [round(float(base + k + cents), 2) for k in (-1, 0, 1)]
+    eps = 1e-9  # so 10.8999999999 still counts as 10.90
+    return [max(c for c in points if c <= price + eps), min(c for c in points if c >= price - eps)]
 
 
 def recommend(model: DemandModel, p: ScenarioParams, result: ScenarioResult, rails: Guardrails) -> Recommendation:
@@ -579,11 +604,7 @@ def backtest(agg: pd.DataFrame, kind: str, seasonal: bool = False, horizon: int 
     fitted only on the months before it, at the price actually charged. The horizon shrinks to
     BACKTEST_MIN_MONTHS when the earliest training windows are too short to fit; None if even that fails.
     Short windows fall back to a non-seasonal fit, as fit_demand would have done at the time."""
-    data = agg[~agg["Excluded"].astype(bool)] if "Excluded" in agg else agg
-    price_col = "Real_Price" if "Real_Price" in data else "Price_Charged"
-    comp_col = "Real_Competitor_Price" if "Real_Competitor_Price" in data else (
-        "Competitor_Price" if "Competitor_Price" in data else None
-    )
+    data, price_col, comp_col = _fit_frame(agg)
     for h in range(min(horizon, len(data) - 1), BACKTEST_MIN_MONTHS - 1, -1):
         try:
             forecast = []
@@ -591,7 +612,10 @@ def backtest(agg: pd.DataFrame, kind: str, seasonal: bool = False, horizon: int 
                 model = fit_demand(data.iloc[:i], kind, seasonal, trend)
                 row = data.iloc[i]
                 comp = float(row[comp_col]) if comp_col and model.has_comp else None
-                ahead = float(month_number(data.index[i:i + 1])[0] - month_number(data.index[i - 1:i])[0])
+                # Months from the last month the model fitted (not the previous row: log-log drops
+                # zero-sales months) to the month forecast
+                last = pd.DatetimeIndex([model.fitted_through])
+                ahead = float(month_number(data.index[i:i + 1])[0] - month_number(last)[0])
                 forecast.append(float(model.predict(float(row[price_col]), comp, data.index[i].month, ahead)))
         except ValueError:
             continue
@@ -816,14 +840,6 @@ def bootstrap(agg: pd.DataFrame, kind: str, params: ScenarioParams, seasonal: bo
     peds = [e for e in peds if np.isfinite(e)]  # NaN where linear demand is zero at that price
     ped = tuple(float(v) for v in np.percentile(peds, [tail, 100 - tail])) if len(peds) >= n / 2 else None
     return Bootstrap((float(low), float(high)), ped, float(ped_price))
-
-
-def optimal_price_range(agg: pd.DataFrame, kind: str, params: ScenarioParams, seasonal: bool = False,
-                        n: int = BOOTSTRAP_SAMPLES, coverage: float = 0.9, seed: int = 0,
-                        trend: bool = False) -> tuple[float, float] | None:
-    """Bootstrap range of P* only (see bootstrap)."""
-    b = bootstrap(agg, kind, params, seasonal, n, coverage, seed, trend)
-    return None if b is None else b.price
 
 
 def best_model(models: dict, backtests: dict) -> str | None:

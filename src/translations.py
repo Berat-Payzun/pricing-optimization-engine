@@ -164,9 +164,12 @@ STRINGS: dict[str, dict[str, str]] = {
         "de": "Höchster Testpreis ({sym})",
     },
     "max_price_help": {
-        "en": "Upper bound of the price search. Default: 2× the highest historical price.",
-        "tr": "Fiyat aramasının üst sınırı. Varsayılan: geçmişteki en yüksek fiyatın 2 katı.",
-        "de": "Obergrenze der Preissuche. Standard: 2× der höchste historische Preis.",
+        "en": "Upper bound of the price search, in today's money. Default: 2× the highest historical price. "
+              "With price pass-through, the scenario searches up to this × its price level.",
+        "tr": "Fiyat aramasının bugünkü parayla üst sınırı. Varsayılan: geçmişteki en yüksek fiyatın 2 katı. "
+              "Fiyat yansıtma açıkken senaryo bu değerin fiyat seviyesiyle çarpımına kadar arar.",
+        "de": "Obergrenze der Preissuche, in heutigem Geld. Standard: 2× der höchste historische Preis. "
+              "Mit Preisweitergabe sucht das Szenario bis zu diesem Wert × seinem Preisniveau.",
     },
     # ---------- page header and errors ----------
     "app_title": {"en": "Pricing Optimization Engine", "tr": "Fiyat Optimizasyon Motoru", "de": "Preisoptimierungs-Engine"},
@@ -1251,6 +1254,14 @@ STRINGS: dict[str, dict[str, str]] = {
               "devam eder, bu yüzden optimum arama aralığının en üstünde çıkar.",
         "de": "Die Nachfrage ist unelastisch (Elastizität {b:.2f} > -1): Bei konstanter Elastizität steigt der "
               "Gewinn mit dem Preis immer weiter, daher liegt das Optimum am oberen Rand des Suchbereichs.",
+    },
+    "warn_opt_at_bottom": {
+        "en": "The optimum is at the bottom of the price search range: profit still rises towards lower prices, "
+              "so this is no real optimum.",
+        "tr": "Optimum, fiyat arama aralığının en altında: kâr daha düşük fiyatlara doğru artmaya devam ediyor, "
+              "bu yüzden bu gerçek bir optimum değil.",
+        "de": "Das Optimum liegt am unteren Ende des Suchbereichs: Der Gewinn steigt zu niedrigeren Preisen hin "
+              "weiter, daher ist dies kein echtes Optimum.",
     },
     "warn_opt_at_top": {
         "en": "The optimum is at the top of the price search range. Raise 'Max price to test' or treat it as unbounded.",

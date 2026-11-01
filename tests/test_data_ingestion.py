@@ -454,3 +454,39 @@ def test_an_explicit_format_adds_no_ambiguity_warnings():
     _, chosen = load_csv(io.StringIO(data), 1, False, dayfirst=True, decimal_comma=True, explicit=True)
     assert {getattr(w, "key", None) for w in auto} & keys == {"warn_dates_dmy", "warn_numbers_comma"}
     assert not {getattr(w, "key", None) for w in chosen} & keys
+
+
+
+# ---------- dot thousands ----------
+
+def test_dot_thousands_in_a_decimal_comma_csv():
+    data = "Date;Price_Charged;Quantity_Sold\n2024-01-01;1.299;2.500\n2024-01-02;1.349;2.400"
+    df, warnings = load_csv(io.StringIO(data), 1, False, decimal_comma=True)
+    assert df["Price_Charged"].tolist() == [1299, 1349] and df["Quantity_Sold"].tolist() == [2500, 2400]
+    assert "warn_numbers_comma" in {getattr(w, "key", None) for w in warnings}  # the hint decided
+
+
+def test_several_dot_groups_settle_dot_thousands():
+    # 1.234.567 can only be dot thousands, so 1.299 next to it is 1299 even with a point hint
+    data = "Date;Price_Charged;Quantity_Sold\n2024-01-01;1.299;1.234.567"
+    df, warnings = load_csv(io.StringIO(data), 1, False, decimal_comma=False)
+    assert df["Price_Charged"].tolist() == [1299] and df["Quantity_Sold"].tolist() == [1234567]
+    assert not {"warn_numbers_comma", "warn_numbers_point"} & {getattr(w, "key", None) for w in warnings}
+
+
+def test_a_point_hint_keeps_dot_decimals():
+    data = "Date;Price_Charged;Quantity_Sold\n2024-01-01;1.299;5"
+    df, warnings = load_csv(io.StringIO(data), 1, False, decimal_comma=False)
+    assert df["Price_Charged"].tolist() == [1.299]
+    assert "warn_numbers_point" in {getattr(w, "key", None) for w in warnings}
+
+
+def test_comma_separated_csv_reads_dots_as_decimals():
+    df, _ = load_csv(csv("Date,Price_Charged,Quantity_Sold\n2024-01-01,1.299,5"), 1, decimal_comma=True)
+    assert df["Price_Charged"].tolist() == [1.299]
+
+
+@pytest.mark.parametrize("decimal_comma", [True, False, None])
+def test_xlsx_dots_are_never_thousands(decimal_comma):
+    # Excel number cells come through as text like "1.299" for a real 1.299
+    assert xlsx_quantities(["1.299"], decimal_comma) == [1.299]

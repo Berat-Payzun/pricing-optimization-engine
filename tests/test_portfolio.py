@@ -81,3 +81,14 @@ def test_pricing_step_reuses_the_fits():
     for rails in (Guardrails(max_change=0), Guardrails(max_change=0.05)):
         expected = portfolio(rows, None, "auto", False, False, shared, rails)
         pd.testing.assert_frame_equal(price_products(fits, shared, rails), expected)
+
+
+
+def test_a_product_neither_model_can_fit_reports_why():
+    lines = ["Date,Product,Price_Charged,Quantity_Sold"] + [
+        f"2024-0{m}-01,SKU-9,{10 + m},{100 - m}" for m in (1, 2, 3)]
+    rows, _ = load_csv(io.StringIO("\n".join(lines)), default_cogs=5)
+    from portfolio import fit_products
+
+    error = fit_products(rows, None, "auto", False, True)["SKU-9"].error
+    assert getattr(error, "key", None) == "err_not_enough_periods"

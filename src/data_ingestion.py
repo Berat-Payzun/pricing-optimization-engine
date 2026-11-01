@@ -79,6 +79,8 @@ ENCODINGS = ("utf-8-sig", "cp1254", "cp1252")
 DECIMAL_COMMA = r"-?(\d{1,3}(\.\d{3})+|\d+),\d+"
 THOUSANDS_COMMA = r"-?\d{1,3}(,\d{3})+(\.\d+)?"  # US style: 1,234 or 1,234.56
 AMBIGUOUS_COMMA = r"-?\d{1,3},\d{3}"  # 1,250 is 1250 in the US and 1.25 in Turkey or Germany
+DOT_THOUSANDS = r"-?\d{1,3}(\.\d{3}){2,}"  # 1.234.567: only ever dot thousands
+AMBIGUOUS_DOT = r"-?\d{1,3}\.\d{3}"  # 1.299 is 1299 in Turkey or Germany and 1.299 in the US
 ISO_DATE = r"\d{4}-\d{1,2}-\d{1,2}"
 # A UTC offset after a time ("2024-02-05T10:00:00+01:00", "...Z"): dropped, keeping the local time
 # of the sale, so every date lands in one time-zone-free column
@@ -117,19 +119,25 @@ def detect_separator(text: str) -> str:
     return max([",", ";", "\t"], key=header.count)
 
 
-def _comma_kinds(s: pd.Series) -> tuple[pd.Series, pd.Series, pd.Series]:
-    """Masks of (stripped text) values that can only be a decimal comma (1.234,56; 12,5), only a
-    thousands comma (1,234.56; 1,234,567), and values that could be either (1,250)."""
+def _comma_kinds(s: pd.Series, dots: bool = True) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Masks of (stripped text) values that can only be in decimal-comma style (1.234,56; 12,5;
+    1.234.567), only in thousands-comma style (1,234.56; 1,234,567), and values that could be
+    either (1,250; 1.299). `dots=False` leaves out the dot-only patterns: in an .xlsx, number cells
+    come through as text like "1.299" for a real 1.299, so a dot there is never a thousands mark."""
     def match(pattern):
         return s.str.fullmatch(pattern).fillna(False).astype(bool)
 
     ambiguous = match(AMBIGUOUS_COMMA)
-    return match(DECIMAL_COMMA) & ~ambiguous, match(THOUSANDS_COMMA) & ~ambiguous, ambiguous
+    decimal = match(DECIMAL_COMMA) & ~ambiguous
+    if dots:
+        ambiguous |= match(AMBIGUOUS_DOT)
+        decimal |= match(DOT_THOUSANDS)
+    return decimal, match(THOUSANDS_COMMA) & ~ambiguous, ambiguous
 
 
 def resolve_decimal_comma(kinds: list[tuple[pd.Series, pd.Series, pd.Series]], hint: bool | None,
                           explicit: bool, file_kind: str) -> tuple[bool, bool]:
-    """How to read ambiguous values like "1,250", from the _comma_kinds masks of the numeric columns:
+    """How to read ambiguous values like "1,250" or "1.299", from the _comma_kinds masks of the numeric columns:
     1. the format most of the unambiguous values use;
     2. an `explicit` hint (a file format the user picked);
     3. a comma-separated CSV: thousands comma (a decimal comma there would split the value, so
@@ -250,7 +258,7 @@ def load_csv(source, default_cogs: float, drop_duplicates: bool = True, dayfirst
     df["Date"] = to_dates(df["Date"], order, parts)
     numeric = list(df.columns.drop(["Date", PRODUCT, FLAG], errors="ignore"))
     text = {col: df[col].astype("string").str.strip() for col in numeric}
-    kinds = {col: _comma_kinds(s) for col, s in text.items()}
+    kinds = {col: _comma_kinds(s, dots=file_kind != XLSX) for col, s in text.items()}
     comma, by_hint = resolve_decimal_comma(list(kinds.values()), decimal_comma, explicit, file_kind)
     if by_hint:
         warnings.append(Msg("warn_numbers_comma") if comma else Msg("warn_numbers_point"))
