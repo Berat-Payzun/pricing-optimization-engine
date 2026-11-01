@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from config import COUNTRY_MAP, CPI_STALE_MONTHS, MIN_PERIODS_FIT, MIN_PERIODS_WARN
+from config import CPI_STALE_MONTHS, MIN_PERIODS_FIT, MIN_PERIODS_WARN
 from translations import Msg
 
 REQUIRED = ["Date", "Price_Charged", "Quantity_Sold"]
@@ -38,15 +38,15 @@ ALIAS_LOOKUP = {alias: target for target, aliases in ALIASES.items() for alias i
 FLAG_VALUES = {
     "stockout": ["stockout", "stock_out", "out_of_stock", "oos", "stok_yok", "stokta_yok", "tukendi",
                  "ausverkauft", "nicht_vorratig", "nicht_vorraetig", "fehlbestand"],
-    # not "sale": an ERP status column says "Sale" for every ordinary transaction
-    "promo": ["promo", "promotion", "discount", "campaign", "kampanya", "indirim",
+    "promo": ["promo", "promotion", "sale", "discount", "campaign", "kampanya", "indirim",
               "aktion", "rabatt", "angebot"],
 }
 FLAG_LOOKUP = {alias: flag for flag, aliases in FLAG_VALUES.items() for alias in aliases}
-# Headers that often hold something else (a transaction status, a free-text note): such a column
-# only counts as the Flag column when at least half its non-empty values are known flag words
-GENERIC_FLAG_HEADERS = {"status", "note", "durum", "etiket", "isaret", "kennzeichen", "hinweis", "markierung"}
-FLAG_MIN_KNOWN_SHARE = 0.5
+# Flag headers that often hold something else, like a transaction status or a free-text note. In such
+# a column only the flag words count (other values are ordinary rows, without a warning), "Sale" is
+# an ordinary transaction rather than a promo, and a column with no flag words at all is ignored.
+GENERIC_FLAG_HEADERS = set(ALIASES[FLAG]) - {"flag", "flags"}
+GENERIC_NOT_FLAGS = {"sale"}
 # A month with more than this share of flagged days is left out of the fit entirely
 FLAG_EXCLUDE_SHARE = 0.5
 
@@ -79,45 +79,26 @@ ENCODINGS = ("utf-8-sig", "cp1254", "cp1252")
 DECIMAL_COMMA = r"-?(\d{1,3}(\.\d{3})+|\d+),\d+"
 THOUSANDS_COMMA = r"-?\d{1,3}(,\d{3})+(\.\d+)?"  # US style: 1,234 or 1,234.56
 AMBIGUOUS_COMMA = r"-?\d{1,3},\d{3}"  # 1,250 is 1250 in the US and 1.25 in Turkey or Germany
-# dd.mm.yyyy, dd/mm/yyyy, mm/dd/yyyy, dd-mm-yyyy, with an optional time after it
-NUMERIC_DATE = r"^(\d{1,2})([./-])(\d{1,2})\2\d{4}"
-
-
-def locale_rule(country: str | None, key: str) -> bool:
-    """A country's "dayfirst" or "decimal_comma" rule (config.COUNTRY_MAP); without a country,
-    ambiguous values are read the US way (month first, decimal point)."""
-    return bool(COUNTRY_MAP.get(country, {}).get(key, False))
-
+ISO_DATE = r"\d{4}-\d{1,2}-\d{1,2}"
+# dd.mm.yyyy, dd/mm/yy, mm/dd/yyyy, dd-mm-yyyy ...: first field, separator, second field, year, rest (a time)
+NUMERIC_DATE = r"^(\d{1,2})([./-])(\d{1,2})\2(\d{4}|\d{2})(?!\d)(.*)$"
 
 XLSX_MAGIC = b"PK\x03\x04"  # .xlsx files are zip archives
 
 
-def read_table(source, country: str | None = None) -> tuple[pd.DataFrame, bool]:
+def read_table(source) -> tuple[pd.DataFrame, bool]:
     """Read a CSV or .xlsx file (path, bytes buffer or text buffer) with every column as text.
-    Returns (frame, decimal_comma), where decimal_comma says whether "10,5" means 10.5."""
+    Returns (frame, default_decimal_comma): how to read a value like "1,250" when neither the
+    data nor the caller settles it (see decimal_comma)."""
     data = Path(source).read_bytes() if isinstance(source, (str, Path)) else source.read()
     if isinstance(data, bytes) and data.startswith(XLSX_MAGIC):
-        frame = pd.read_excel(io.BytesIO(data), sheet_name=0, dtype=str)
-        return frame, detect_decimal_comma(frame, country)
+        # Excel number cells come through as "10.5"; a comma can only be in text typed in a cell
+        return pd.read_excel(io.BytesIO(data), sheet_name=0, dtype=str), False
     text = data if isinstance(data, str) else decode(data)
     sep = detect_separator(text)
-    # With "," as the separator a comma inside a value is a thousands separator (US quoted
-    # "1,234"), so decimal commas are only recognised in ";" or tab separated files.
+    # With "," as the separator a comma inside a value is usually a thousands separator (US quoted
+    # "1,234"); ";" and tab separated files mostly come from decimal-comma locales.
     return pd.read_csv(io.StringIO(text), sep=sep, dtype=str), sep != ","
-
-
-def detect_decimal_comma(frame: pd.DataFrame, country: str | None) -> bool:
-    """Whether the numbers stored as text in an .xlsx use a decimal comma. Excel number cells come
-    through as "10.5", so only text typed in a cell can carry a comma: "1.234,56" or "10,5" say
-    decimal comma, "1,234.56" or "1,234,567" say thousands comma, and when the file only holds
-    values like "1,250" that could be either, the country decides."""
-    cells = frame.stack().astype("string").str.strip()
-    ambiguous = cells.str.fullmatch(AMBIGUOUS_COMMA)
-    decimal = int((cells.str.fullmatch(DECIMAL_COMMA) & ~ambiguous).sum())
-    thousands = int((cells.str.fullmatch(THOUSANDS_COMMA) & ~ambiguous).sum())
-    if decimal or thousands:
-        return decimal > thousands
-    return locale_rule(country, "decimal_comma")
 
 
 def decode(data: bytes) -> str:
@@ -135,44 +116,94 @@ def detect_separator(text: str) -> str:
     return max([",", ";", "\t"], key=header.count)
 
 
+def _comma_kinds(s: pd.Series) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Masks of values that can only be a decimal comma (1.234,56; 12,5), only a thousands comma
+    (1,234.56; 1,234,567), and values that could be either (1,250)."""
+    def match(pattern):
+        return s.str.fullmatch(pattern).fillna(False).astype(bool)
+
+    ambiguous = match(AMBIGUOUS_COMMA)
+    return match(DECIMAL_COMMA) & ~ambiguous, match(THOUSANDS_COMMA) & ~ambiguous, ambiguous
+
+
+def resolve_decimal_comma(frame: pd.DataFrame, hint: bool | None, default: bool) -> tuple[bool, bool]:
+    """How to read ambiguous values like "1,250" in these (numeric) columns: by the format most of
+    the unambiguous values use, else by `hint` (the user's file format or country), else by
+    `default` (from read_table). Returns (decimal_comma, hint_decided), where hint_decided says the
+    hint settled values that are really in the file."""
+    cells = frame.stack().astype("string").str.strip()
+    decimal, thousands, ambiguous = _comma_kinds(cells)
+    n_dec, n_thou = int(decimal.sum()), int(thousands.sum())
+    if n_dec or n_thou:
+        return n_dec > n_thou, False
+    if hint is not None:
+        return hint, bool(ambiguous.any())
+    return default, False
+
+
 def to_number(values: pd.Series, decimal_comma: bool) -> pd.Series:
+    """Text to numbers. A value that can only be read one way is read that way; `decimal_comma`
+    decides only the ambiguous ones, so a file mixing 1,234.50 and 12,5 keeps both."""
     s = values.astype("string").str.strip()
-    if decimal_comma:
-        is_comma = s.str.fullmatch(DECIMAL_COMMA).fillna(False).astype(bool)
-        s = s.where(~is_comma, s.str.replace(".", "", regex=False).str.replace(",", ".", regex=False))
-    else:
-        is_thousands = s.str.fullmatch(THOUSANDS_COMMA).fillna(False).astype(bool)
-        s = s.where(~is_thousands, s.str.replace(",", "", regex=False))
+    decimal, thousands, ambiguous = _comma_kinds(s)
+    decimal |= ambiguous & decimal_comma
+    thousands |= ambiguous & (not decimal_comma)
+    s = s.where(~decimal, s.str.replace(".", "", regex=False).str.replace(",", ".", regex=False))
+    s = s.where(~thousands, s.str.replace(",", "", regex=False))
     return pd.to_numeric(s, errors="coerce").astype("float64")  # plain floats, not nullable Float64
 
 
-def to_dates(values: pd.Series, country: str | None = None) -> pd.Series:
-    """Parse dates. For numeric dates like 05/02/2024 the order is taken from the data when any
-    value settles it (a first field above 12 means day first, a second field above 12 month
-    first); dotted dates are always day first; otherwise the country's convention decides."""
+def date_order(values: pd.Series, hint: bool | None) -> tuple[bool, bool]:
+    """Whether numeric dates like 05/02/2024 are day first. The data decides when any value settles
+    it (a first field above 12: day first; a second field above 12: month first), dotted dates are
+    always day first, and otherwise `hint` (the user's file format or country) decides, else month
+    first. Returns (dayfirst, hint_decided)."""
+    parts = values.astype("string").str.strip().str.extract(NUMERIC_DATE).dropna(subset=[0])
+    if parts.empty:
+        return False, False
+    first, second = parts[0].astype(int), parts[2].astype(int)
+    if (first > 12).any():
+        return True, False
+    if (second > 12).any():
+        return False, False
+    if (parts[1] == ".").any():
+        return True, False
+    return (hint, True) if hint is not None else (False, False)
+
+
+def to_dates(values: pd.Series, dayfirst: bool = False) -> pd.Series:
+    """Parse dates value by value, so a column mixing ISO (2024-02-05) and numeric (05/02/24) dates
+    reads both: ISO as year-month-day, numeric dates in the `dayfirst` order (a 2-digit year is
+    20yy), anything else ("Feb 5, 2024") by pandas' own guess."""
     s = values.astype("string").str.strip()
-    parts = s.dropna().str.extract(NUMERIC_DATE).dropna()
-    dayfirst = False
-    if not parts.empty:
-        first, second = parts[0].astype(int), parts[2].astype(int)
-        if (first > 12).any():
-            dayfirst = True
-        elif (second > 12).any():
-            dayfirst = False
-        else:
-            dayfirst = bool((parts[1] == ".").any()) or locale_rule(country, "dayfirst")
-    return pd.to_datetime(s, errors="coerce", dayfirst=dayfirst)
+    out = pd.Series(pd.NaT, index=s.index, dtype="datetime64[ns]")
+    iso = s.str.match(ISO_DATE).fillna(False).astype(bool)
+    parts = s.str.extract(NUMERIC_DATE)
+    numeric = parts[0].notna() & ~iso
+    other = s.notna() & ~iso & ~numeric
+    if iso.any():
+        out[iso] = pd.to_datetime(s[iso], format="ISO8601", errors="coerce")
+    if numeric.any():
+        p = parts[numeric]
+        day, month = (p[0], p[2]) if dayfirst else (p[2], p[0])
+        year = p[3].where(p[3].str.len() == 4, "20" + p[3])
+        text = year + "-" + month.str.zfill(2) + "-" + day.str.zfill(2) + p[4].fillna("")
+        out[numeric] = pd.to_datetime(text, format="ISO8601", errors="coerce")
+    if other.any():
+        out[other] = pd.to_datetime(s[other], format="mixed", errors="coerce")
+    return out
 
 
-def load_csv(source, default_cogs: float, drop_duplicates: bool = True,
-             country: str | None = None) -> tuple[pd.DataFrame, list[str]]:
+def load_csv(source, default_cogs: float, drop_duplicates: bool = True, dayfirst: bool | None = None,
+             decimal_comma: bool | None = None) -> tuple[pd.DataFrame, list[str]]:
     """Read and clean raw sales rows from a CSV or .xlsx file. Returns (clean_df, warnings).
 
     Exact duplicate rows usually come from combining overlapping exports and would double
     the sales; `drop_duplicates=False` keeps them for transaction logs where they can be real.
-    `country` (a config.COUNTRY_MAP key) decides dates and numbers the data leaves ambiguous."""
+    `dayfirst` and `decimal_comma` say how to read dates like 05/02/2024 and numbers like
+    1,250 when the data itself leaves them ambiguous (None: month first, and the file type's default)."""
     warnings: list[str] = []
-    raw, decimal_comma = read_table(source, country)
+    raw, default_comma = read_table(source)
     df = normalize_columns(raw)
     flag_header = next((c for c in raw.columns if ALIAS_LOOKUP.get(fold_header(c)) == FLAG), None)
 
@@ -181,9 +212,16 @@ def load_csv(source, default_cogs: float, drop_duplicates: bool = True,
         raise DataValidationError(Msg("err_missing_cols", cols=", ".join(missing)))
 
     df = df[[c for c in REQUIRED + OPTIONAL + [PRODUCT, FLAG] if c in df.columns]].copy()
-    df["Date"] = to_dates(df["Date"], country)
-    for col in df.columns.drop(["Date", PRODUCT, FLAG], errors="ignore"):
-        number = to_number(df[col], decimal_comma)
+    order, by_hint = date_order(df["Date"], dayfirst)
+    if by_hint:
+        warnings.append(Msg("warn_dates_dmy") if order else Msg("warn_dates_mdy"))
+    df["Date"] = to_dates(df["Date"], order)
+    numeric = list(df.columns.drop(["Date", PRODUCT, FLAG], errors="ignore"))
+    comma, by_hint = resolve_decimal_comma(df[numeric], decimal_comma, default_comma)
+    if by_hint:
+        warnings.append(Msg("warn_numbers_comma") if comma else Msg("warn_numbers_point"))
+    for col in numeric:
+        number = to_number(df[col], comma)
         # "inf" parses as a number, and 1e308 overflows the monthly sums: neither is a real price or
         # quantity, so both count as missing (rows missing a required value are dropped and counted)
         df[col] = number.where(np.isfinite(number) & (number.abs() < MAX_VALUE))
@@ -191,16 +229,18 @@ def load_csv(source, default_cogs: float, drop_duplicates: bool = True,
         df[PRODUCT] = df[PRODUCT].fillna("").astype(str).str.strip().replace("", "—")
     if FLAG in df.columns:
         folded = df[FLAG].fillna("").map(fold_header)
-        filled = folded[folded != ""]
-        if (fold_header(flag_header) in GENERIC_FLAG_HEADERS and len(filled)
-                and filled.isin(list(FLAG_LOOKUP)).mean() < FLAG_MIN_KNOWN_SHARE):
-            warnings.append(Msg("warn_flag_col_ignored", column=str(flag_header)))
-            df, folded = df.drop(columns=FLAG), None
-    if FLAG in df.columns:
-        unknown = sorted(set(folded[(folded != "") & ~folded.isin(list(FLAG_LOOKUP))]))
-        if unknown:
-            warnings.append(Msg("warn_flag_unknown", values=", ".join(unknown[:5])))
-        df[FLAG] = folded.map(FLAG_LOOKUP).fillna("")  # unknown values count as clean
+        generic = fold_header(flag_header) in GENERIC_FLAG_HEADERS
+        lookup = {k: v for k, v in FLAG_LOOKUP.items() if not (generic and k in GENERIC_NOT_FLAGS)}
+        flags = folded.map(lookup).fillna("")  # unknown values count as clean
+        if generic and not (flags != "").any():
+            if (folded != "").any():
+                warnings.append(Msg("warn_flag_col_ignored", column=str(flag_header)))
+            df = df.drop(columns=FLAG)
+        else:
+            unknown = sorted(set(folded[(folded != "") & (flags == "")]))
+            if unknown and not generic:
+                warnings.append(Msg("warn_flag_unknown", values=", ".join(unknown[:5])))
+            df[FLAG] = flags
 
     n_raw = len(df)
     df = df.dropna(subset=REQUIRED)

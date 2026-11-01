@@ -122,3 +122,11 @@ def test_old_zero_cost_override_meant_not_set(schema, expected):
     assert load(json.dumps(d).encode()).settings["cost_override"] == expected
     d["settings"]["cost_override"] = 12.5  # a real override is kept from any schema
     assert load(json.dumps(d).encode()).settings["cost_override"] == 12.5
+
+
+def test_file_format_round_trips_and_unknown_formats_are_dropped():
+    assert load(dump({**SETTINGS, "file_format": "dmy_comma"}, None, DATA)).settings["file_format"] == "dmy_comma"
+    d = json.loads(doc())
+    d["settings"]["file_format"] = "yyyy/dd/mm"
+    loaded = load(json.dumps(d).encode())
+    assert "file_format" not in loaded.settings and loaded.warnings

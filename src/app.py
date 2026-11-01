@@ -22,6 +22,7 @@ from config import (
     BOOTSTRAP_SAMPLES,
     COUNTRY_MAP,
     DEFAULTS,
+    FILE_FORMATS,
     MAX_CHANGE_DEFAULT,
     PERIOD_MULT,
     SEASONAL_MIN_MONTHS,
@@ -53,6 +54,8 @@ from report import Chart, Series, VLine, build_excel, build_pdf, label_rows
 from translations import DECIMAL_COMMA, LANGUAGES, Msg, fmt_money, fmt_number, localize, translate
 
 SAMPLE_PATH = Path(__file__).resolve().parents[1] / "sample_data.csv"
+# Data warnings that ask the user to pick a file format; not shown once they have picked one
+AMBIGUITY_WARNINGS = {"warn_dates_dmy", "warn_dates_mdy", "warn_numbers_comma", "warn_numbers_point"}
 
 # Categorical slots from the validated reference palette (fixed order), light / dark steps
 PALETTE = {
@@ -99,8 +102,8 @@ def live(cached, country: str):
 
 
 @st.cache_data(show_spinner=False)
-def load_rows(raw: bytes, default_cogs: float, drop_duplicates: bool, country: str):
-    return load_csv(io.BytesIO(raw), default_cogs, drop_duplicates, country)
+def load_rows(raw: bytes, default_cogs: float, drop_duplicates: bool, dayfirst: bool, decimal_comma: bool):
+    return load_csv(io.BytesIO(raw), default_cogs, drop_duplicates, dayfirst, decimal_comma)
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
@@ -113,10 +116,19 @@ def cached_bootstrap(agg: pd.DataFrame, kind: str, seasonal: bool, trend: bool, 
     return bootstrap(agg, kind, ScenarioParams(**params), seasonal, trend=trend, ped_price=ped_price)
 
 
-# Only the fits are cached: fees, VAT and guardrails change often and only need the cheap pricing step
-@st.cache_data(show_spinner=False, max_entries=16)
+# The slow per-product fits are cached apart from the pricing step, so changing fees, VAT or
+# guardrails doesn't refit every product. cache_resource hands back the same objects instead of
+# unpickling copies on every rerun; nothing downstream modifies them.
+@st.cache_resource(show_spinner=False, max_entries=16)
 def cached_portfolio_fits(rows: pd.DataFrame, cpi: pd.Series | None, model_choice: str, seasonal: bool, trend: bool):
     return fit_products(rows, cpi, model_choice, seasonal, trend)
+
+
+@st.cache_data(show_spinner=False, max_entries=16)
+def cached_portfolio(rows: pd.DataFrame, cpi: pd.Series | None, model_choice: str, seasonal: bool, trend: bool,
+                     shared: dict, rails: dict):
+    fits = cached_portfolio_fits(rows, cpi, model_choice, seasonal, trend)
+    return price_products(fits, shared, Guardrails(**rails))
 
 
 # ---------- language ----------
@@ -255,6 +267,8 @@ with st.sidebar:
         st.caption(t("sample_caption"))
         st.download_button(t("sample_download"), SAMPLE_PATH.read_bytes(), "sample_data.csv", "text/csv")
     drop_dupes = st.toggle(t("dupes_label"), value=True, help=t("dupes_help"), key="drop_dupes")
+    file_format = st.selectbox(t("file_format_label"), list(FILE_FORMATS), format_func=lambda f: t(f"file_format_{f}"),
+                               help=t("file_format_help"), key="file_format")
     product_slot = st.container()  # filled once the file is read, if it has a product column
 
     country = st.selectbox(t("country_label"), list(COUNTRY_MAP), format_func=lambda c: t(f"country_{c}"),
@@ -289,7 +303,12 @@ st.caption(t("app_caption", country=t(f"country_{country}"), currency=COUNTRY_MA
 raw = upload.getvalue() if upload is not None else SAMPLE_PATH.read_bytes()
 product = all_rows = None
 try:
-    rows, data_warnings = load_rows(raw, default_cogs, drop_dupes, country)
+    # Dates and numbers the file leaves ambiguous: the chosen file format, or with "auto" the country's
+    dayfirst, decimal_comma = FILE_FORMATS[file_format] or (COUNTRY_MAP[country]["dayfirst"],
+                                                            COUNTRY_MAP[country]["decimal_comma"])
+    rows, data_warnings = load_rows(raw, default_cogs, drop_dupes, dayfirst, decimal_comma)
+    if file_format != "auto":  # the user has said how to read them: no "ambiguous" warnings
+        data_warnings = [w for w in data_warnings if getattr(w, "key", None) not in AMBIGUITY_WARNINGS]
     if PRODUCT in rows:
         with product_slot:
             products = sorted(rows[PRODUCT].unique())
@@ -622,8 +641,8 @@ if all_rows is not None:
                   comp_match_cut=match_cut / 100, comp_match_rise=match_rise / 100)
     pf_rails = dict(max_change=max_change / 100, min_margin=min_margin / 100, ending=ending)
     with st.spinner(t("pf_spinner")):
-        fits = cached_portfolio_fits(all_rows, infl.series if use_real else None, model_choice, seasonal, use_trend)
-        pf = price_products(fits, shared, Guardrails(**pf_rails))
+        pf = cached_portfolio(all_rows, infl.series if use_real else None, model_choice, seasonal, use_trend,
+                              shared, pf_rails)
     pf_view = pd.DataFrame({
         t("pf_col_product"): pf["product"],
         t("pf_col_model"): [t(f"model_{k}") if isinstance(k, str) else "—" for k in pf["model"]],
@@ -989,7 +1008,7 @@ st.caption("This product uses the FRED® API but is not endorsed or certified by
 
 actual_units = pd.to_numeric(edited[t("col_actual")], errors="coerce")
 current_settings = dict(
-    drop_dupes=drop_dupes, country=country, timeframe=timeframe, default_cogs=default_cogs,
+    drop_dupes=drop_dupes, file_format=file_format, country=country, timeframe=timeframe, default_cogs=default_cogs,
     cost_override=cost_override, fixed_monthly=fixed_monthly, capacity=capacity, import_share=import_share,
     model_kind=model_choice, use_real=use_real, use_season=seasonal, use_trend=use_trend, product=product,
     max_price=max_price,

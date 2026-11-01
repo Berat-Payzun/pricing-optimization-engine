@@ -23,7 +23,7 @@ to a monthly index. Series were verified live on 2026-10-26:
 """
 
 # dayfirst / decimal_comma: how an uploaded file's ambiguous values are read when the data itself
-# can't tell (05/02/2024 as 5 February; text "1,250" as 1.25). See data_ingestion.
+# can't tell (05/02/2024 as 5 February; text "1,250" as 1.25), with the "auto" file format below.
 COUNTRY_MAP = {
     "US": {
         "name": "United States",
@@ -195,4 +195,14 @@ DEFAULTS = {
     "fixed_costs": 5000.0,
     "capacity": 10000,
     "import_share": 30.0,
+}
+
+# The uploaded file's date order and decimal separator, as (dayfirst, decimal_comma); they only
+# decide values the data itself leaves ambiguous. "auto" takes them from the selected country, so
+# a fixed format keeps the parsed data the same when the user switches countries.
+FILE_FORMATS = {
+    "auto": None,
+    "dmy_comma": (True, True),  # 05/02/2024 · 1.234,56
+    "dmy_point": (True, False),  # 05/02/2024 · 1,234.56
+    "mdy_point": (False, False),  # 02/05/2024 · 1,234.56
 }

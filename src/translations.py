@@ -1047,12 +1047,43 @@ STRINGS: dict[str, dict[str, str]] = {
         "tr": "Mevsimsellik için en az {min_n} aylık veri gerekir ({n} ay mevcut): model mevsimsellik olmadan kuruldu.",
         "de": "Saisonbereinigung braucht mindestens {min_n} Monate Daten ({n} vorhanden): ohne Saison geschätzt.",
     },
-    "warn_season_missing": {
-        "en": "Seasonality needs every calendar month in the fit, but {n} month(s) have no data: fitted without it.",
-        "tr": "Mevsimsellik için modelde her takvim ayı bulunmalı, ancak {n} ayın verisi yok: model mevsimsellik "
-              "olmadan kuruldu.",
-        "de": "Saisonbereinigung braucht jeden Kalendermonat in der Schätzung, aber für {n} Monat(e) fehlen Daten: "
-              "ohne Saison geschätzt.",
+    "warn_season_partial": {
+        "en": "No data for {n} calendar month(s) in the fit: seasonality treats them as an average month.",
+        "tr": "Modelde {n} takvim ayı için veri yok: mevsimsellik bu ayları ortalama bir ay sayar.",
+        "de": "Für {n} Kalendermonat(e) gibt es keine Daten in der Schätzung: Die Saison behandelt sie als "
+              "durchschnittlichen Monat.",
+    },
+    "warn_dates_dmy": {
+        "en": "Dates like 05/02/2024 can be read either way: read as day/month (5 February). If that's wrong, "
+              "pick the file format in the sidebar.",
+        "tr": "05/02/2024 gibi tarihler iki türlü okunabilir: gün/ay olarak okundu (5 Şubat). Yanlışsa kenar "
+              "çubuğundan dosya biçimini seçin.",
+        "de": "Datumsangaben wie 05/02/2024 sind mehrdeutig: als Tag/Monat gelesen (5. Februar). Falls das falsch "
+              "ist, wählen Sie das Dateiformat in der Seitenleiste.",
+    },
+    "warn_dates_mdy": {
+        "en": "Dates like 05/02/2024 can be read either way: read as month/day (2 May). If that's wrong, "
+              "pick the file format in the sidebar.",
+        "tr": "05/02/2024 gibi tarihler iki türlü okunabilir: ay/gün olarak okundu (2 Mayıs). Yanlışsa kenar "
+              "çubuğundan dosya biçimini seçin.",
+        "de": "Datumsangaben wie 05/02/2024 sind mehrdeutig: als Monat/Tag gelesen (2. Mai). Falls das falsch "
+              "ist, wählen Sie das Dateiformat in der Seitenleiste.",
+    },
+    "warn_numbers_comma": {
+        "en": "Numbers like 1,250 can be read either way: read with a decimal comma (1.25). If that's wrong, "
+              "pick the file format in the sidebar.",
+        "tr": "1,250 gibi sayılar iki türlü okunabilir: ondalık virgülle okundu (1,25). Yanlışsa kenar "
+              "çubuğundan dosya biçimini seçin.",
+        "de": "Zahlen wie 1,250 sind mehrdeutig: mit Dezimalkomma gelesen (1,25). Falls das falsch ist, wählen "
+              "Sie das Dateiformat in der Seitenleiste.",
+    },
+    "warn_numbers_point": {
+        "en": "Numbers like 1,250 can be read either way: read with a thousands comma (1250). If that's wrong, "
+              "pick the file format in the sidebar.",
+        "tr": "1,250 gibi sayılar iki türlü okunabilir: binlik ayırıcı olarak okundu (1250). Yanlışsa kenar "
+              "çubuğundan dosya biçimini seçin.",
+        "de": "Zahlen wie 1,250 sind mehrdeutig: mit Tausenderkomma gelesen (1250). Falls das falsch ist, wählen "
+              "Sie das Dateiformat in der Seitenleiste.",
     },
     "warn_cpi_stale": {
         "en": "CPI data ends {as_of}: later months are not inflation-adjusted.",
@@ -1261,13 +1292,31 @@ STRINGS: dict[str, dict[str, str]] = {
               "gelten eingebaute Werte. FRED_API_KEY in den Secrets der App hinterlegen (siehe README).",
     },
     "warn_flag_col_ignored": {
-        "en": "Column '{column}' was not used as the Flag column: most of its values aren't 'stockout' or 'promo' "
+        "en": "Column '{column}' was not used as the Flag column: none of its values is 'stockout' or 'promo' "
               "(e.g. a transaction status). Rename it to 'Flag' to use it anyway.",
-        "tr": "'{column}' sütunu Flag sütunu olarak kullanılmadı: değerlerinin çoğu 'stok yok' veya 'kampanya' değil "
+        "tr": "'{column}' sütunu Flag sütunu olarak kullanılmadı: hiçbir değeri 'stok yok' veya 'kampanya' değil "
               "(ör. bir işlem durumu). Yine de kullanmak için adını 'Flag' yapın.",
-        "de": "Spalte „{column}“ wurde nicht als Flag-Spalte verwendet: Die meisten Werte sind nicht „ausverkauft“ "
+        "de": "Spalte „{column}“ wurde nicht als Flag-Spalte verwendet: Keiner ihrer Werte ist „ausverkauft“ "
               "oder „Aktion“ (z. B. ein Transaktionsstatus). Benennen Sie sie in „Flag“ um, um sie trotzdem zu nutzen.",
     },
+    "file_format_label": {"en": "File format", "tr": "Dosya biçimi", "de": "Dateiformat"},
+    "file_format_help": {
+        "en": "How to read dates like 05/02/2024 and numbers like 1,250 when the file itself doesn't settle it. "
+              "Auto follows the selected country; a fixed format keeps the data the same when you switch countries.",
+        "tr": "Dosyanın kendisi belirlemediğinde 05/02/2024 gibi tarihlerin ve 1,250 gibi sayıların nasıl okunacağı. "
+              "Otomatik seçili ülkeyi izler; sabit bir biçim, ülke değiştirdiğinizde veriyi aynı tutar.",
+        "de": "Wie Datumsangaben wie 05/02/2024 und Zahlen wie 1,250 gelesen werden, wenn die Datei es nicht "
+              "eindeutig macht. Automatisch folgt dem gewählten Land; ein festes Format hält die Daten beim "
+              "Länderwechsel gleich.",
+    },
+    "file_format_auto": {"en": "Auto (from the country)", "tr": "Otomatik (ülkeye göre)",
+                         "de": "Automatisch (nach Land)"},
+    "file_format_dmy_comma": {"en": "dd/mm/yyyy · 1.234,56", "tr": "gg/aa/yyyy · 1.234,56",
+                              "de": "TT/MM/JJJJ · 1.234,56"},
+    "file_format_dmy_point": {"en": "dd/mm/yyyy · 1,234.56", "tr": "gg/aa/yyyy · 1,234.56",
+                              "de": "TT/MM/JJJJ · 1,234.56"},
+    "file_format_mdy_point": {"en": "mm/dd/yyyy · 1,234.56", "tr": "aa/gg/yyyy · 1,234.56",
+                              "de": "MM/TT/JJJJ · 1,234.56"},
     "warn_flag_unknown": {
         "en": "Unrecognised Flag value(s) treated as normal sales: {values}. Use 'stockout' or 'promo'.",
         "tr": "Tanınmayan Flag değer(ler)i normal satış sayıldı: {values}. 'stok yok' veya 'kampanya' kullanın.",

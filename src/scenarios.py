@@ -14,7 +14,7 @@ import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from config import COUNTRY_MAP, PERIOD_MULT
+from config import COUNTRY_MAP, FILE_FORMATS, PERIOD_MULT
 from optimizer import ENDINGS
 from translations import Msg
 
@@ -37,6 +37,7 @@ class Setting:
 # preference and is not saved.
 SETTINGS: dict[str, Setting] = {
     "drop_dupes": Setting(bool),
+    "file_format": Setting(str, choices=tuple(FILE_FORMATS)),
     "country": Setting(str, choices=tuple(COUNTRY_MAP)),
     "timeframe": Setting(str, choices=tuple(PERIOD_MULT)),
     "default_cogs": Setting(float, 0.0),

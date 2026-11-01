@@ -40,6 +40,9 @@ def test_all_keys_used_in_source_exist():
     used |= {f"{prefix}_{p}" for prefix in ("timeframe", "per") for p in ("Monthly", "Quarterly", "Annual")}
     used |= {"model_linear", "model_loglog"}
     used |= {f"pf_status_{s}" for s in ("ok", "no_optimum", "no_profit")}
+    from config import FILE_FORMATS
+
+    used |= {f"file_format_{f}" for f in FILE_FORMATS}
     for module in ("data_ingestion.py", "optimizer.py"):
         used |= set(re.findall(r"""Msg\(\s*["']([a-z0-9_]+)["']""", (SRC / module).read_text(encoding="utf-8")))
     assert used, "regex found no keys"
@@ -53,6 +56,10 @@ def test_dynamic_keys_cover_config():
         assert f"country_{c}" in STRINGS
     for p in PERIOD_MULT:
         assert f"timeframe_{p}" in STRINGS and f"per_{p}" in STRINGS
+    from config import FILE_FORMATS
+
+    for f in FILE_FORMATS:
+        assert f"file_format_{f}" in STRINGS
 
 
 def test_msg_is_english_string_and_localizes():
