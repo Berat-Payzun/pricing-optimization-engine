@@ -72,9 +72,10 @@ def fit_products(rows: pd.DataFrame, cpi: pd.Series | None, model_choice: str, s
             backtests = {k: backtest(agg, k, seasonal, trend=trend) if isinstance(m, DemandModel) else None
                          for k, m in models.items()}
             kind = best_model(models, backtests) if model_choice == "auto" else model_choice
-            model = models.get(kind)
+            # Neither model could be fitted: report the linear fit's reason, as the app does
+            model = models.get(kind or "linear")
             if not isinstance(model, DemandModel):
-                raise model if isinstance(model, Exception) else ValueError(str(product))
+                raise model
             bt = backtests[kind]
             fits[product] = ProductFit(agg, kind, model, bt.wape if bt is not None else float("nan"))
         except (DataValidationError, ValueError) as e:

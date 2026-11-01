@@ -34,6 +34,7 @@ from data_ingestion import PRODUCT, DataValidationError, aggregate, deflate, loa
 from macro_api import FRED_KEY_ENV, fred_api_key, get_fx, get_inflation, uses_fred
 from optimizer import (
     ENDINGS,
+    DemandModel,
     Guardrails,
     ScenarioParams,
     backtest,
@@ -108,6 +109,11 @@ def load_rows(raw: bytes, default_cogs: float, drop_duplicates: bool, dayfirst: 
 @st.cache_data(show_spinner=False, max_entries=64)
 def cached_backtest(agg: pd.DataFrame, kind: str, seasonal: bool, trend: bool):
     return backtest(agg, kind, seasonal, trend=trend)
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def cached_sensitivity(model: dict, params: dict):
+    return sensitivity(DemandModel(**model), ScenarioParams(**params))
 
 
 @st.cache_data(show_spinner=False, max_entries=64)
@@ -575,7 +581,10 @@ with metrics_area:
 
     if blocker:
         st.error(blocker, icon=":material/block:")
-    for w in dict.fromkeys(model.warnings + today.warnings + rec.warnings):
+    # The blocker already says the optimum is at an edge of the tested prices
+    edge_notes = {"warn_opt_at_top", "warn_opt_at_bottom"} if blocker else set()
+    today_notes = [w for w in today.warnings if getattr(w, "key", None) not in edge_notes]
+    for w in dict.fromkeys(model.warnings + today_notes + rec.warnings):
         st.warning(localize(w, lang), icon=":material/warning:")
 
 col = colors()
@@ -608,7 +617,7 @@ with metrics_area, st.expander(t("breakdown_expander")):
 
 # ---------- sensitivity (tornado) ----------
 
-sens = sensitivity(model, today_params) if blocker is None else None
+sens = cached_sensitivity(asdict(model), asdict(today_params)) if blocker is None else None
 with metrics_area, st.expander(t("sens_expander"), icon=":material/tune:"):
     if sens is None or sens.empty:
         st.caption(t("sens_na"))

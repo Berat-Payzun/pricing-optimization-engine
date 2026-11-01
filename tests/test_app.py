@@ -129,3 +129,21 @@ def test_fee_change_reprices_the_portfolio_without_refitting(app, monkeypatch):
     assert not app.exception and calls == {"fit": 0, "price": 1}
     app.run()  # nothing changed: the priced table comes from the cache too
     assert calls == {"fit": 0, "price": 1}
+
+
+
+def test_sensitivity_is_cached_between_reruns(app, monkeypatch):
+    import optimizer
+
+    calls = []
+    real = optimizer.sensitivity
+
+    def spy(*a, **k):
+        calls.append(1)
+        return real(*a, **k)
+
+    monkeypatch.setattr(optimizer, "sensitivity", spy)
+    app.number_input(key="fixed_monthly").set_value(1234.0).run()  # new inputs: computed once
+    assert not app.exception and len(calls) == 1
+    app.run()
+    assert len(calls) == 1
