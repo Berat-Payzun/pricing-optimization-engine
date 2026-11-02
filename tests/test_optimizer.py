@@ -890,16 +890,28 @@ def test_optimum_at_the_bottom_warns():
     assert r.edge == "low" and "warn_opt_at_bottom" in [w.key for w in r.warnings]
 
 
-def test_backtest_trend_step_counts_from_the_last_fitted_month():
-    """Log-log drops zero-sales months: after one, the forecast is two months on from the fit's level."""
+def test_backtest_trend_steps_one_month_from_the_training_window():
+    """Log-log drops zero-sales months, but the model's level is still the training window's last
+    month, so each forecast is one month on."""
     from optimizer import backtest
 
     agg = synthetic_agg("loglog", n=30, noise=0.02)
     agg.iloc[27, agg.columns.get_loc("Quantity_Sold")] = 0.0
     bt = backtest(agg, "loglog", trend=True, horizon=3)
     model = fit_demand(agg.iloc[:28], "loglog", trend=True)
-    assert model.fitted_through == agg.index[26]
     row = agg.iloc[28]
-    expected = model.predict(row["Price_Charged"], row["Competitor_Price"], agg.index[28].month, 2.0)
+    expected = model.predict(row["Price_Charged"], row["Competitor_Price"], agg.index[28].month, 1.0)
     assert bt.months[1] == agg.index[28]
     assert bt.forecast[1] == pytest.approx(float(expected))
+
+
+def test_trend_level_is_the_last_month_of_the_data_even_when_log_log_drops_it():
+    """Zero sales in the last 3 months: today's demand is the fitted trend carried 3 months past
+    the last month the fit kept, the same level the backtest forecasts from."""
+    agg = synthetic_agg("loglog", n=30, noise=0.02)
+    agg["Quantity_Sold"] *= np.exp(0.03 * np.arange(30))
+    agg.iloc[-3:, agg.columns.get_loc("Quantity_Sold")] = 0.0
+    full = fit_demand(agg, "loglog", trend=True)
+    kept = fit_demand(agg.iloc[:-3], "loglog", trend=True)
+    assert full.trend == pytest.approx(kept.trend)
+    assert full.predict(45.0, 50.0) == pytest.approx(float(kept.predict(45.0, 50.0, months_ahead=3.0)))
