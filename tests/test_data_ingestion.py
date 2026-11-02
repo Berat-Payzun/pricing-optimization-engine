@@ -442,9 +442,13 @@ def test_comma_separated_file_keeps_thousands_commas_unless_a_format_is_chosen()
     df, warnings = load_csv(csv(data), default_cogs=1, dayfirst=True, decimal_comma=True)
     assert df["Quantity_Sold"].tolist() == [1250.0]
     assert not any(getattr(w, "key", None) in ("warn_numbers_comma", "warn_numbers_point") for w in warnings)
-    # ...but a file format the user picked does
-    df, _ = load_csv(csv(data), default_cogs=1, dayfirst=True, decimal_comma=True, explicit=True)
+    # ...but a file format the user picked does, when no value in the file settles it
+    plain = data.replace("19.99", "20")
+    df, _ = load_csv(csv(plain), default_cogs=1, dayfirst=True, decimal_comma=True, explicit=True)
     assert df["Quantity_Sold"].tolist() == [1.25]
+    # 19.99 can only be a decimal point, so it settles 1,250 before any chosen format
+    df, _ = load_csv(csv(data), default_cogs=1, dayfirst=True, decimal_comma=True, explicit=True)
+    assert df["Quantity_Sold"].tolist() == [1250.0]
 
 
 def test_an_explicit_format_adds_no_ambiguity_warnings():
@@ -490,3 +494,22 @@ def test_comma_separated_csv_reads_dots_as_decimals():
 def test_xlsx_dots_are_never_thousands(decimal_comma):
     # Excel number cells come through as text like "1.299" for a real 1.299
     assert xlsx_quantities(["1.299"], decimal_comma) == [1.299]
+
+
+# ---------- point decimals and leading zeros ----------
+
+@pytest.mark.parametrize("decimal_comma", [None, True])
+def test_point_decimals_in_a_semicolon_csv_settle_dot_values(decimal_comma):
+    # 12.99 can only be a point decimal, so 4.500 next to it is 4.5, not 4500, whatever the country
+    data = "Date;Price_Charged;Quantity_Sold;Cost_Per_Unit\n2024-01-01;12.99;5;4.500\n2024-01-02;13.49;4;4.500"
+    df, warnings = load_csv(io.StringIO(data), 1, False, decimal_comma=decimal_comma)
+    assert df["Price_Charged"].tolist() == [12.99, 13.49]
+    assert df["Cost_Per_Unit"].tolist() == [4.5, 4.5]
+    assert not {"warn_numbers_comma", "warn_numbers_point"} & {getattr(w, "key", None) for w in warnings}
+
+
+@pytest.mark.parametrize("value", ["0.125", "0,125"])
+def test_a_leading_zero_is_never_a_thousands_group(value):
+    data = f"Date;Price_Charged;Quantity_Sold;Cost_Per_Unit\n2024-01-01;12,5;5;{value}"
+    df, _ = load_csv(io.StringIO(data), 1, False, decimal_comma=True)
+    assert df["Cost_Per_Unit"].tolist() == [0.125]
