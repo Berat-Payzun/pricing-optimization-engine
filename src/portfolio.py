@@ -58,6 +58,8 @@ def fit_products(rows: pd.DataFrame, cpi: pd.Series | None, model_choice: str, s
                  trend: bool) -> dict[str, ProductFit]:
     """Aggregate, deflate, fit and backtest every product (the slow part of the portfolio).
     `model_choice` is "auto", "linear" or "loglog"."""
+    if model_choice not in ("auto", "linear", "loglog"):
+        raise ValueError(f"unknown model_choice {model_choice!r}")
     fits = {}
     for product in sorted(rows[PRODUCT].unique()):
         try:

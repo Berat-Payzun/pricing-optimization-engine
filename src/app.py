@@ -501,6 +501,9 @@ blocker = (t("err_no_profit") if not today.viable
            else t("err_no_interior", max=money(max_price, sym)) if today.edge == "high"
            else t("err_no_interior_low", min=money(float(today.curve["price"].min()), sym)) if today.edge == "low"
            else None)
+# The blocker already says the optimum is at an edge of the tested prices: no second note on screen or in the report
+edge_notes = {"warn_opt_at_top", "warn_opt_at_bottom"} if blocker else set()
+today_notes = [w for w in today.warnings if getattr(w, "key", None) not in edge_notes]
 price_range = boot.price if boot is not None and blocker is None and not rec.binding else None
 
 opt, rec_row = result.optimal, rec.row
@@ -581,9 +584,6 @@ with metrics_area:
 
     if blocker:
         st.error(blocker, icon=":material/block:")
-    # The blocker already says the optimum is at an edge of the tested prices
-    edge_notes = {"warn_opt_at_top", "warn_opt_at_bottom"} if blocker else set()
-    today_notes = [w for w in today.warnings if getattr(w, "key", None) not in edge_notes]
     for w in dict.fromkeys(model.warnings + today_notes + rec.warnings):
         st.warning(localize(w, lang), icon=":material/warning:")
 
@@ -972,8 +972,11 @@ sheets = {
                                            t("chart_forecast"): bt.forecast, t("chart_naive"): bt.naive}).round(2)}
        if bt is not None else {}),
 }
+# The scenario's own edge note repeats the blocker when the scenario ends at the same edge
+scenario_notes = [w for w in result.warnings
+                  if result.edge != today.edge or getattr(w, "key", None) not in edge_notes]
 notes = ([blocker] if blocker else []) + list(dict.fromkeys(
-    localize(w, lang) for w in model.warnings + today.warnings + rec.warnings + result.warnings + data_warnings
+    localize(w, lang) for w in model.warnings + today_notes + rec.warnings + scenario_notes + data_warnings
     + deflate_warnings))
 chart = Chart(
     title=t("chart_main_title", per=per),

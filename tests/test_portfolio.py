@@ -92,3 +92,10 @@ def test_a_product_neither_model_can_fit_reports_why():
 
     error = fit_products(rows, None, "auto", False, True)["SKU-9"].error
     assert getattr(error, "key", None) == "err_not_enough_periods"
+
+
+def test_an_unknown_model_choice_is_rejected():
+    from portfolio import fit_products
+
+    with pytest.raises(ValueError, match="model_choice"):
+        fit_products(multi_product_rows(), None, "cubic", False, False)

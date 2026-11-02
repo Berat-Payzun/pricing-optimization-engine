@@ -57,11 +57,12 @@ class DemandModel:
     season: np.ndarray | None = None
     resid_sd: float = 0.0  # in-sample SD of monthly quantity residuals (degrees-of-freedom adjusted)
     # Change in demand per month (units for linear, log units for log-log) or None. The intercept is
-    # for the last fitted month, so the optimizer prices at today's demand level, not a past average.
+    # for `level_month`, so the optimizer prices at today's demand level, not a past average.
     trend: float | None = None
-    # The last month the fit used (a log-log fit drops zero-sales months, so it can be earlier than
-    # the data's last month); with a trend, forecasts move on from this month's demand level
-    fitted_through: pd.Timestamp | None = None
+    # The month the demand level is for: the last month the fit kept, or a later stockout / promo month
+    # (not demand, so the trend carries through it), but never a zero-sales month a log-log fit dropped
+    # (demand may really have fallen). Set by every fit; forecasts move on from here with a trend.
+    level_month: pd.Timestamp | None = None
 
     @property
     def has_comp(self) -> bool:
@@ -71,7 +72,7 @@ class DemandModel:
                 months_ahead: float = 0.0) -> np.ndarray:
         """Monthly quantity demanded at `price` (scalar or array), for an average month
         unless `month` (1-12) is given and the model is seasonal. With a trend, demand is at the
-        last fitted month's level, moved on by `months_ahead` months."""
+        `level_month`'s level, moved on by `months_ahead` months."""
         p = np.asarray(price, dtype=float)
         s = self.season[month - 1] if self.season is not None and month is not None else 0.0
         if self.trend is not None:
@@ -124,8 +125,9 @@ class _Design:
     n_dropped: int
     use_season: bool
     warnings: list[str]
-    t_last: float | None = None  # trend column (last X column) value of the last month, or None without a trend
+    t_last: float | None = None  # trend column value of `level_month`, or None without a trend
     season_months: tuple[int, ...] = ()  # calendar months with a dummy or the base, when use_season
+    level_month: pd.Timestamp | None = None  # see DemandModel.level_month
 
 
 def _fit_frame(agg: pd.DataFrame) -> tuple[pd.DataFrame, str, str | None]:
@@ -141,6 +143,7 @@ def _fit_frame(agg: pd.DataFrame) -> tuple[pd.DataFrame, str, str | None]:
 
 
 def _design(agg: pd.DataFrame, kind: str, seasonal: bool, trend: bool = False) -> _Design:
+    excluded = agg.index[agg["Excluded"].astype(bool)] if "Excluded" in agg else agg.index[:0]
     agg, price_col, comp_col = _fit_frame(agg)
     cols = [price_col] + ([comp_col] if comp_col else [])
     data = agg[cols + ["Quantity_Sold"]].dropna()
@@ -170,14 +173,17 @@ def _design(agg: pd.DataFrame, kind: str, seasonal: bool, trend: bool = False) -
     if use_season:
         X = np.hstack([X, month_dummies(data.index, months)])
     # Months counted from the first month of `agg`, so a backtest's shorter training windows share the origin
-    t = month_number(data.index) - (month_number(agg.index[:1])[0] if len(agg) else 0.0)
+    origin = month_number(pd.DatetimeIndex([agg.index.min()]))[0] if len(agg) else 0.0
+    t = month_number(data.index) - origin
     if trend:
         X = np.hstack([X, t[:, None]])
 
     if len(data) < X.shape[1] + 2:
         raise ValueError(Msg("err_not_enough_periods", n=len(data), kind=kind))
+    level_month = max([data.index.max()] + ([excluded.max()] if len(excluded) else []))
+    t_level = float(month_number(pd.DatetimeIndex([level_month]))[0] - origin)
     return _Design(data, price_col, comp_col, X, y, n_dropped, use_season, warnings,
-                   float(t[-1]) if trend else None, months if use_season else ())
+                   t_level if trend else None, months if use_season else (), level_month)
 
 
 def _model(d: _Design, kind: str, intercept: float, coef: np.ndarray, warnings: list[str]) -> DemandModel:
@@ -186,7 +192,7 @@ def _model(d: _Design, kind: str, intercept: float, coef: np.ndarray, warnings: 
     trend = None
     if d.t_last is not None:
         trend = float(coef[-1])
-        intercept += trend * d.t_last  # demand level of the last fitted month
+        intercept += trend * d.t_last  # demand level of level_month
         coef = coef[:-1]
     season = None
     if d.use_season:
@@ -208,7 +214,7 @@ def _model(d: _Design, kind: str, intercept: float, coef: np.ndarray, warnings: 
         warnings=warnings,
         season=season,
         trend=trend,
-        fitted_through=d.data.index[-1] if len(d.data) else None,
+        level_month=d.level_month,
     )
 
 
@@ -394,13 +400,8 @@ def _break_evens(grid: np.ndarray, profit: np.ndarray) -> list[float]:
     """Prices where profit crosses zero, interpolated between grid points. A crossing is where
     profit turns from negative to non-negative or back; with np.sign, a grid point at exactly zero
     would count as a crossing on both of its sides and be listed twice."""
-    crossings = np.where(np.diff(profit >= 0))[0]
-    return [
-        float(np.interp(0, [profit[j], profit[j + 1]], [grid[j], grid[j + 1]]))
-        if profit[j] < profit[j + 1]
-        else float(np.interp(0, [profit[j + 1], profit[j]], [grid[j + 1], grid[j]]))
-        for j in crossings
-    ]
+    crossings = np.where(np.diff(profit >= 0))[0]  # one side < 0, the other >= 0: never a zero divisor
+    return [float(grid[j] - profit[j] * (grid[j + 1] - grid[j]) / (profit[j + 1] - profit[j])) for j in crossings]
 
 
 def run_scenario(model: DemandModel, p: ScenarioParams) -> ScenarioResult:
@@ -605,6 +606,7 @@ def backtest(agg: pd.DataFrame, kind: str, seasonal: bool = False, horizon: int 
     BACKTEST_MIN_MONTHS when the earliest training windows are too short to fit; None if even that fails.
     Short windows fall back to a non-seasonal fit, as fit_demand would have done at the time."""
     data, price_col, comp_col = _fit_frame(agg)
+    months = month_number(data.index)  # gaps in the data keep their length
     for h in range(min(horizon, len(data) - 1), BACKTEST_MIN_MONTHS - 1, -1):
         try:
             forecast = []
@@ -612,10 +614,9 @@ def backtest(agg: pd.DataFrame, kind: str, seasonal: bool = False, horizon: int 
                 model = fit_demand(data.iloc[:i], kind, seasonal, trend)
                 row = data.iloc[i]
                 comp = float(row[comp_col]) if comp_col and model.has_comp else None
-                # Months from the last month the model fitted (not the previous row: log-log drops
-                # zero-sales months) to the month forecast
-                last = pd.DatetimeIndex([model.fitted_through])
-                ahead = float(month_number(data.index[i:i + 1])[0] - month_number(last)[0])
+                # Months from the model's level (a log-log fit's level stays at the last month it
+                # kept, before any zero-sales months) to the month forecast
+                ahead = float(months[i] - months[data.index.get_loc(model.level_month)])
                 forecast.append(float(model.predict(float(row[price_col]), comp, data.index[i].month, ahead)))
         except ValueError:
             continue
