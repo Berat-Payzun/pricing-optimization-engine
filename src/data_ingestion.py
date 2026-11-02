@@ -142,7 +142,7 @@ def _comma_kinds(s: pd.Series, dots: bool = True) -> tuple[pd.Series, pd.Series,
 def resolve_decimal_comma(kinds: list[tuple[pd.Series, pd.Series, pd.Series]], hint: bool | None,
                           explicit: bool, file_kind: str) -> tuple[bool, bool]:
     """How to read ambiguous values like "1,250" or "1.299", from the _comma_kinds masks of the numeric columns:
-    1. the format most of the unambiguous values use (12,5 against 12.99 or 1,234.56);
+    1. the format most of the unambiguous values use (12,5 against 12.99 or 1,234.56), unless tied;
     2. an `explicit` hint (a file format the user picked);
     3. a comma-separated CSV: thousands comma (a decimal comma there would split the value, so
        commas inside values are US quoting like "1,234"; Turkish/German Excel uses ";");
@@ -151,7 +151,7 @@ def resolve_decimal_comma(kinds: list[tuple[pd.Series, pd.Series, pd.Series]], h
     Returns (decimal_comma, hint_decided), hint_decided meaning step 4 settled values in the file."""
     n_dec = sum(int(d.sum()) for d, _, _ in kinds)
     n_point = sum(int(t.sum()) for _, t, _ in kinds)
-    if n_dec or n_point:
+    if n_dec != n_point:
         return n_dec > n_point, False
     if hint is not None and explicit:
         return hint, False
@@ -167,11 +167,11 @@ def to_number(values: pd.Series, decimal_comma: bool, kinds=None) -> pd.Series:
     decides only the ambiguous ones, so a file mixing 1,234.50 and 12,5 keeps both. `kinds`: the
     column's _comma_kinds masks, when already computed."""
     s = values.astype("string").str.strip()
-    decimal, thousands, ambiguous = kinds if kinds is not None else _comma_kinds(s)
+    decimal, point, ambiguous = kinds if kinds is not None else _comma_kinds(s)
     decimal = decimal | (ambiguous & decimal_comma)
-    thousands = thousands | (ambiguous & (not decimal_comma))
+    point = point | (ambiguous & (not decimal_comma))
     s = s.where(~decimal, s.str.replace(".", "", regex=False).str.replace(",", ".", regex=False))
-    s = s.where(~thousands, s.str.replace(",", "", regex=False))
+    s = s.where(~point, s.str.replace(",", "", regex=False))  # drops thousands commas; 12.99 is unchanged
     return pd.to_numeric(s, errors="coerce").astype("float64")  # plain floats, not nullable Float64
 
 

@@ -513,3 +513,11 @@ def test_a_leading_zero_is_never_a_thousands_group(value):
     data = f"Date;Price_Charged;Quantity_Sold;Cost_Per_Unit\n2024-01-01;12,5;5;{value}"
     df, _ = load_csv(io.StringIO(data), 1, False, decimal_comma=True)
     assert df["Cost_Per_Unit"].tolist() == [0.125]
+
+
+def test_a_tie_between_number_styles_falls_back_to_the_hint():
+    # 12,5 says decimal comma and 0.125 says point: the country hint decides 1.299
+    data = "Date;Price_Charged;Quantity_Sold;Cost_Per_Unit\n2024-01-01;12,5;1.299;0.125"
+    df, warnings = load_csv(io.StringIO(data), 1, False, decimal_comma=True)
+    assert df["Quantity_Sold"].tolist() == [1299]
+    assert "warn_numbers_comma" in {getattr(w, "key", None) for w in warnings}
