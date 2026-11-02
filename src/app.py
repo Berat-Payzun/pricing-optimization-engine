@@ -972,8 +972,11 @@ sheets = {
                                            t("chart_forecast"): bt.forecast, t("chart_naive"): bt.naive}).round(2)}
        if bt is not None else {}),
 }
+# The scenario's own edge note repeats the blocker when the scenario ends at the same edge
+scenario_notes = [w for w in result.warnings
+                  if result.edge != today.edge or getattr(w, "key", None) not in edge_notes]
 notes = ([blocker] if blocker else []) + list(dict.fromkeys(
-    localize(w, lang) for w in model.warnings + today_notes + rec.warnings + result.warnings + data_warnings
+    localize(w, lang) for w in model.warnings + today_notes + rec.warnings + scenario_notes + data_warnings
     + deflate_warnings))
 chart = Chart(
     title=t("chart_main_title", per=per),
